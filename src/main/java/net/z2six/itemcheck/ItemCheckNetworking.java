@@ -2,7 +2,6 @@ package net.z2six.itemcheck;
 
 import java.util.Comparator;
 import java.util.List;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
@@ -15,8 +14,8 @@ public final class ItemCheckNetworking {
 
     public static void sendFullSync(ServerPlayer player) {
         ItemCheckSavedData savedData = ItemCheckSavedData.get(player.serverLevel());
-        List<ResourceLocation> checkedItems = savedData.getCheckedItems().stream()
-                .sorted(Comparator.comparing(ResourceLocation::toString))
+        List<String> checkedItems = savedData.getCheckedItems().stream()
+                .sorted(Comparator.naturalOrder())
                 .toList();
         PacketDistributor.sendToPlayer(player, new SyncChecklistStatePayload(checkedItems, savedData.getAllTabViewState(), savedData.getFilterTabs()));
     }
@@ -25,7 +24,7 @@ public final class ItemCheckNetworking {
         server.getPlayerList().getPlayers().forEach(ItemCheckNetworking::sendFullSync);
     }
 
-    public static void broadcastUpdate(ResourceLocation itemId, boolean checked) {
-        PacketDistributor.sendToAllPlayers(new UpdateItemCheckedPayload(itemId, checked));
+    public static void broadcastUpdate(String entryId, boolean checked) {
+        PacketDistributor.sendToAllPlayers(new UpdateItemCheckedPayload(entryId, checked));
     }
 }

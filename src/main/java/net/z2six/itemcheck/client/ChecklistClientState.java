@@ -5,7 +5,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import net.minecraft.client.Minecraft;
-import net.minecraft.resources.ResourceLocation;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.z2six.itemcheck.ChecklistFilterTab;
 import net.z2six.itemcheck.ChecklistTabViewState;
@@ -15,7 +14,7 @@ import net.z2six.itemcheck.network.SaveFilterTabsPayload;
 import net.z2six.itemcheck.network.SetItemCheckedPayload;
 
 public final class ChecklistClientState {
-    private static final Set<ResourceLocation> CHECKED_ITEMS = new HashSet<>();
+    private static final Set<String> CHECKED_ITEMS = new HashSet<>();
     private static ChecklistTabViewState allTabViewState = ChecklistTabViewState.defaultState();
     private static List<ChecklistFilterTab> filterTabs = List.of();
     private static boolean synced;
@@ -27,7 +26,7 @@ public final class ChecklistClientState {
         ItemCheckClientBridge.install(ChecklistClientState::replaceState, ChecklistClientState::applyDelta);
     }
 
-    public static void replaceState(Collection<ResourceLocation> checkedItems, ChecklistTabViewState newAllTabViewState, List<ChecklistFilterTab> newFilterTabs) {
+    public static void replaceState(Collection<String> checkedItems, ChecklistTabViewState newAllTabViewState, List<ChecklistFilterTab> newFilterTabs) {
         CHECKED_ITEMS.clear();
         CHECKED_ITEMS.addAll(checkedItems);
         allTabViewState = newAllTabViewState == null ? ChecklistTabViewState.defaultState() : newAllTabViewState;
@@ -35,11 +34,11 @@ public final class ChecklistClientState {
         synced = true;
     }
 
-    public static void applyDelta(ResourceLocation itemId, boolean checked) {
+    public static void applyDelta(String entryId, boolean checked) {
         if (checked) {
-            CHECKED_ITEMS.add(itemId);
+            CHECKED_ITEMS.add(entryId);
         } else {
-            CHECKED_ITEMS.remove(itemId);
+            CHECKED_ITEMS.remove(entryId);
         }
         synced = true;
     }
@@ -51,8 +50,8 @@ public final class ChecklistClientState {
         synced = false;
     }
 
-    public static boolean isChecked(ResourceLocation itemId) {
-        return CHECKED_ITEMS.contains(itemId);
+    public static boolean isChecked(String entryId) {
+        return CHECKED_ITEMS.contains(entryId);
     }
 
     public static int getCheckedCount() {
@@ -77,14 +76,14 @@ public final class ChecklistClientState {
         }
     }
 
-    public static void toggle(ResourceLocation itemId) {
+    public static void toggle(String entryId) {
         if (Minecraft.getInstance().getConnection() == null) {
             return;
         }
 
-        boolean checked = !isChecked(itemId);
-        applyDelta(itemId, checked);
-        PacketDistributor.sendToServer(new SetItemCheckedPayload(itemId, checked));
+        boolean checked = !isChecked(entryId);
+        applyDelta(entryId, checked);
+        PacketDistributor.sendToServer(new SetItemCheckedPayload(entryId, checked));
     }
 
     public static void saveFilterTabs(ChecklistTabViewState newAllTabViewState, List<ChecklistFilterTab> newFilterTabs) {

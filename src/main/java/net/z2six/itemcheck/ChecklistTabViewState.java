@@ -2,15 +2,13 @@ package net.z2six.itemcheck;
 
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Objects;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.RegistryFriendlyByteBuf;
-import net.minecraft.resources.ResourceLocation;
 
-public record ChecklistTabViewState(ChecklistSortMode sortMode, List<ResourceLocation> manualOrder, boolean hideNonStackable) {
+public record ChecklistTabViewState(ChecklistSortMode sortMode, List<String> manualOrder, boolean hideNonStackable) {
     private static final int MAX_MANUAL_ORDER = 4096;
     private static final String SORT_MODE_KEY = "sort_mode";
     private static final String MANUAL_ORDER_KEY = "manual_order";
@@ -21,7 +19,7 @@ public record ChecklistTabViewState(ChecklistSortMode sortMode, List<ResourceLoc
         manualOrder = sanitizeManualOrder(manualOrder);
     }
 
-    public ChecklistTabViewState(ChecklistSortMode sortMode, List<ResourceLocation> manualOrder) {
+    public ChecklistTabViewState(ChecklistSortMode sortMode, List<String> manualOrder) {
         this(sortMode, manualOrder, true);
     }
 
@@ -34,9 +32,9 @@ public record ChecklistTabViewState(ChecklistSortMode sortMode, List<ResourceLoc
         int sortModeIndex = buffer.readVarInt();
         ChecklistSortMode sortMode = sortModeIndex >= 0 && sortModeIndex < values.length ? values[sortModeIndex] : ChecklistSortMode.GROUP;
         int count = buffer.readVarInt();
-        List<ResourceLocation> manualOrder = new java.util.ArrayList<>(count);
+        List<String> manualOrder = new java.util.ArrayList<>(count);
         for (int index = 0; index < count; index++) {
-            manualOrder.add(buffer.readResourceLocation());
+            manualOrder.add(buffer.readUtf(256));
         }
         boolean hideNonStackable = buffer.readBoolean();
         return new ChecklistTabViewState(sortMode, manualOrder, hideNonStackable);
@@ -45,10 +43,8 @@ public record ChecklistTabViewState(ChecklistSortMode sortMode, List<ResourceLoc
     public static ChecklistTabViewState fromTag(CompoundTag tag) {
         ChecklistSortMode sortMode = readSortMode(tag.getString(SORT_MODE_KEY));
         ListTag orderTag = tag.getList(MANUAL_ORDER_KEY, Tag.TAG_STRING);
-        List<ResourceLocation> manualOrder = orderTag.stream()
+        List<String> manualOrder = orderTag.stream()
                 .map(Tag::getAsString)
-                .map(ResourceLocation::tryParse)
-                .filter(Objects::nonNull)
                 .toList();
         boolean hideNonStackable = !tag.contains(HIDE_NON_STACKABLE_KEY, Tag.TAG_BYTE) || tag.getBoolean(HIDE_NON_STACKABLE_KEY);
         return new ChecklistTabViewState(sortMode, manualOrder, hideNonStackable);
@@ -57,8 +53,8 @@ public record ChecklistTabViewState(ChecklistSortMode sortMode, List<ResourceLoc
     public void write(RegistryFriendlyByteBuf buffer) {
         buffer.writeVarInt(this.sortMode.ordinal());
         buffer.writeVarInt(this.manualOrder.size());
-        for (ResourceLocation itemId : this.manualOrder) {
-            buffer.writeResourceLocation(itemId);
+        for (String entryId : this.manualOrder) {
+            buffer.writeUtf(entryId, 256);
         }
         buffer.writeBoolean(this.hideNonStackable);
     }
@@ -68,7 +64,6 @@ public record ChecklistTabViewState(ChecklistSortMode sortMode, List<ResourceLoc
         tag.putString(SORT_MODE_KEY, this.sortMode.name());
         ListTag orderTag = new ListTag();
         this.manualOrder.stream()
-                .map(ResourceLocation::toString)
                 .map(StringTag::valueOf)
                 .forEach(orderTag::add);
         tag.put(MANUAL_ORDER_KEY, orderTag);
@@ -76,15 +71,15 @@ public record ChecklistTabViewState(ChecklistSortMode sortMode, List<ResourceLoc
         return tag;
     }
 
-    private static List<ResourceLocation> sanitizeManualOrder(List<ResourceLocation> manualOrder) {
+    private static List<String> sanitizeManualOrder(List<String> manualOrder) {
         if (manualOrder == null || manualOrder.isEmpty()) {
             return List.of();
         }
 
-        LinkedHashSet<ResourceLocation> orderedIds = new LinkedHashSet<>();
-        for (ResourceLocation itemId : manualOrder) {
-            if (itemId != null && ItemCheckCatalog.isTrackable(itemId)) {
-                orderedIds.add(itemId);
+        LinkedHashSet<String> orderedIds = new LinkedHashSet<>();
+        for (String entryId : manualOrder) {
+            if (ItemCheckCatalog.isTrackableEntryKey(entryId)) {
+                orderedIds.add(entryId);
                 if (orderedIds.size() >= MAX_MANUAL_ORDER) {
                     break;
                 }

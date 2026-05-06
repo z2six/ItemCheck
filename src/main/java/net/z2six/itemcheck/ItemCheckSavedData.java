@@ -9,7 +9,6 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.saveddata.SavedData;
 
@@ -20,7 +19,7 @@ public final class ItemCheckSavedData extends SavedData {
     private static final String ALL_TAB_VIEW_STATE_KEY = "all_tab_view_state";
     private static final int MAX_FILTER_TABS = 64;
 
-    private final Set<ResourceLocation> checkedItems = new HashSet<>();
+    private final Set<String> checkedItems = new HashSet<>();
     private List<ChecklistFilterTab> filterTabs = List.of();
     private ChecklistTabViewState allTabViewState = ChecklistTabViewState.defaultState();
 
@@ -33,9 +32,9 @@ public final class ItemCheckSavedData extends SavedData {
         ListTag checkedList = tag.getList(CHECKED_ITEMS_KEY, Tag.TAG_STRING);
 
         for (int index = 0; index < checkedList.size(); index++) {
-            ResourceLocation itemId = ResourceLocation.tryParse(checkedList.getString(index));
-            if (itemId != null && ItemCheckCatalog.isTrackable(itemId)) {
-                data.checkedItems.add(itemId);
+            String entryId = checkedList.getString(index);
+            if (ItemCheckCatalog.isTrackableEntryKey(entryId)) {
+                data.checkedItems.add(entryId);
             }
         }
 
@@ -52,7 +51,7 @@ public final class ItemCheckSavedData extends SavedData {
         return data;
     }
 
-    public Set<ResourceLocation> getCheckedItems() {
+    public Set<String> getCheckedItems() {
         return Set.copyOf(this.checkedItems);
     }
 
@@ -64,8 +63,8 @@ public final class ItemCheckSavedData extends SavedData {
         return this.allTabViewState;
     }
 
-    public void setChecked(ResourceLocation itemId, boolean checked) {
-        boolean changed = checked ? this.checkedItems.add(itemId) : this.checkedItems.remove(itemId);
+    public void setChecked(String entryId, boolean checked) {
+        boolean changed = checked ? this.checkedItems.add(entryId) : this.checkedItems.remove(entryId);
         if (changed) {
             this.setDirty();
         }
@@ -97,8 +96,8 @@ public final class ItemCheckSavedData extends SavedData {
     public CompoundTag save(CompoundTag tag, HolderLookup.Provider provider) {
         ListTag checkedList = new ListTag();
         this.checkedItems.stream()
-                .sorted(Comparator.comparing(ResourceLocation::toString))
-                .forEach(itemId -> checkedList.add(StringTag.valueOf(itemId.toString())));
+                .sorted(Comparator.naturalOrder())
+                .forEach(entryId -> checkedList.add(StringTag.valueOf(entryId)));
         tag.put(CHECKED_ITEMS_KEY, checkedList);
 
         ListTag tabsList = new ListTag();

@@ -12,7 +12,8 @@ import net.z2six.itemcheck.ChecklistTabViewState;
 import net.z2six.itemcheck.ItemCheckClientBridge;
 import net.z2six.itemcheck.Itemcheck;
 
-public record SyncChecklistStatePayload(List<ResourceLocation> checkedItems, ChecklistTabViewState allTabViewState, List<ChecklistFilterTab> filterTabs) implements CustomPacketPayload {
+public record SyncChecklistStatePayload(List<String> checkedItems, ChecklistTabViewState allTabViewState, List<ChecklistFilterTab> filterTabs) implements CustomPacketPayload {
+    private static final int MAX_ENTRY_ID_LENGTH = 256;
     public static final Type<SyncChecklistStatePayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(Itemcheck.MODID, "sync_checklist_state"));
     public static final StreamCodec<RegistryFriendlyByteBuf, SyncChecklistStatePayload> STREAM_CODEC = CustomPacketPayload.codec(SyncChecklistStatePayload::write, SyncChecklistStatePayload::new);
 
@@ -28,8 +29,8 @@ public record SyncChecklistStatePayload(List<ResourceLocation> checkedItems, Che
 
     private void write(RegistryFriendlyByteBuf buffer) {
         buffer.writeVarInt(this.checkedItems.size());
-        for (ResourceLocation itemId : this.checkedItems) {
-            buffer.writeResourceLocation(itemId);
+        for (String entryId : this.checkedItems) {
+            buffer.writeUtf(entryId, MAX_ENTRY_ID_LENGTH);
         }
 
         this.allTabViewState.write(buffer);
@@ -48,11 +49,11 @@ public record SyncChecklistStatePayload(List<ResourceLocation> checkedItems, Che
         ItemCheckClientBridge.applyFullSync(payload.checkedItems(), payload.allTabViewState(), payload.filterTabs());
     }
 
-    private static List<ResourceLocation> readItemIds(RegistryFriendlyByteBuf buffer) {
+    private static List<String> readItemIds(RegistryFriendlyByteBuf buffer) {
         int count = buffer.readVarInt();
-        List<ResourceLocation> ids = new ArrayList<>(count);
+        List<String> ids = new ArrayList<>(count);
         for (int index = 0; index < count; index++) {
-            ids.add(buffer.readResourceLocation());
+            ids.add(buffer.readUtf(MAX_ENTRY_ID_LENGTH));
         }
         return ids;
     }

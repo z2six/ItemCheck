@@ -19,7 +19,6 @@ import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.narration.NarratableEntry;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
 import net.z2six.itemcheck.ChecklistFilterAction;
 import net.z2six.itemcheck.ChecklistFilterRule;
 import net.z2six.itemcheck.ChecklistFilterTab;
@@ -58,10 +57,10 @@ public final class ItemChecklistScreen extends Screen {
     private static final Comparator<ChecklistCatalogEntry> GROUP_SORT = Comparator
             .comparing(ChecklistCatalogEntry::primarySortTag, String.CASE_INSENSITIVE_ORDER)
             .thenComparing(ChecklistCatalogEntry::displayName, String.CASE_INSENSITIVE_ORDER)
-            .thenComparing(entry -> entry.itemId().toString());
+            .thenComparing(ChecklistCatalogEntry::entryId);
     private static final Comparator<ChecklistCatalogEntry> ALPHABETICAL_SORT = Comparator
             .comparing(ChecklistCatalogEntry::displayName, String.CASE_INSENSITIVE_ORDER)
-            .thenComparing(entry -> entry.itemId().toString());
+            .thenComparing(ChecklistCatalogEntry::entryId);
 
     private final List<ChecklistCatalogEntry> catalog = ChecklistCatalogEntry.createCatalog();
     private final List<Button> tabButtons = new ArrayList<>();
@@ -81,6 +80,7 @@ public final class ItemChecklistScreen extends Screen {
     private FilterEditorList filterEditorList;
     private int selectedCustomTabIndex = -1;
     private boolean editorOpen;
+    private int controlsBottom = SEARCH_Y + FIELD_HEIGHT;
     private int tabButtonsBottom = TABS_Y + TAB_HEIGHT;
     private List<ChecklistFilterTab> renderedTabs = List.of();
     private ChecklistTabViewState renderedAllTabViewState = ChecklistTabViewState.defaultState();
@@ -165,7 +165,7 @@ public final class ItemChecklistScreen extends Screen {
         boolean hideNonStackable = this.getSelectedViewState().hideNonStackable();
         long progressChecked = this.catalog.stream()
                 .filter(entry -> !hideNonStackable || entry.maxStackSize() > 1)
-                .filter(entry -> ChecklistClientState.isChecked(entry.itemId()))
+                .filter(entry -> ChecklistClientState.isChecked(entry.entryId()))
                 .count();
         long progressTotal = this.catalog.stream()
                 .filter(entry -> !hideNonStackable || entry.maxStackSize() > 1)
@@ -280,7 +280,7 @@ public final class ItemChecklistScreen extends Screen {
         }
 
         this.stackableOnlyCheckbox = this.addRenderableWidget(Checkbox.builder(Component.translatable("itemcheck.filter.hide_non_stackable"), this.font)
-                .pos(OUTER_MARGIN, SEARCH_Y)
+                .pos(this.getStackableFilterX(), this.getStackableFilterY())
                 .maxWidth(STACKABLE_FILTER_WIDTH)
                 .selected(selected)
                 .onValueChange((checkbox, checked) -> this.setHideNonStackable(checked))
@@ -357,7 +357,7 @@ public final class ItemChecklistScreen extends Screen {
         int left = OUTER_MARGIN;
         int right = this.getListRight();
         int x = left;
-        int y = TABS_Y;
+        int y = this.getTabsY();
 
         List<Component> labels = new ArrayList<>();
         labels.add(Component.translatable("itemcheck.tab.all"));
@@ -600,27 +600,27 @@ public final class ItemChecklistScreen extends Screen {
             return baseOrderedEntries;
         }
 
-        Map<ResourceLocation, Integer> manualPositions = new HashMap<>();
-        List<ResourceLocation> manualOrder = viewState.manualOrder();
+        Map<String, Integer> manualPositions = new HashMap<>();
+        List<String> manualOrder = viewState.manualOrder();
         for (int index = 0; index < manualOrder.size(); index++) {
             manualPositions.putIfAbsent(manualOrder.get(index), index);
         }
 
         return baseOrderedEntries.stream()
-                .sorted(Comparator.comparingInt((ChecklistCatalogEntry entry) -> manualPositions.getOrDefault(entry.itemId(), Integer.MAX_VALUE))
+                .sorted(Comparator.comparingInt((ChecklistCatalogEntry entry) -> manualPositions.getOrDefault(entry.entryId(), Integer.MAX_VALUE))
                         .thenComparing(baseComparator))
                 .toList();
     }
 
-    private void applyManualReorder(ResourceLocation draggedItemId, int targetVisibleIndex) {
+    private void applyManualReorder(String draggedEntryId, int targetVisibleIndex) {
         if (this.visibleEntries.size() < 2 || this.orderedEntries.isEmpty()) {
             return;
         }
 
-        List<ResourceLocation> visibleIds = this.visibleEntries.stream()
-                .map(ChecklistCatalogEntry::itemId)
+        List<String> visibleIds = this.visibleEntries.stream()
+                .map(ChecklistCatalogEntry::entryId)
                 .toList();
-        int fromVisibleIndex = visibleIds.indexOf(draggedItemId);
+        int fromVisibleIndex = visibleIds.indexOf(draggedEntryId);
         if (fromVisibleIndex < 0) {
             return;
         }
@@ -633,18 +633,18 @@ public final class ItemChecklistScreen extends Screen {
             return;
         }
 
-        List<ResourceLocation> reorderedVisibleIds = new ArrayList<>(visibleIds);
+        List<String> reorderedVisibleIds = new ArrayList<>(visibleIds);
         reorderedVisibleIds.remove(fromVisibleIndex);
-        reorderedVisibleIds.add(clampedTargetIndex, draggedItemId);
+        reorderedVisibleIds.add(clampedTargetIndex, draggedEntryId);
 
-        Set<ResourceLocation> visibleSet = new HashSet<>(visibleIds);
-        Iterator<ResourceLocation> reorderedVisibleIterator = reorderedVisibleIds.iterator();
-        List<ResourceLocation> reorderedFullOrder = new ArrayList<>(this.orderedEntries.size());
+        Set<String> visibleSet = new HashSet<>(visibleIds);
+        Iterator<String> reorderedVisibleIterator = reorderedVisibleIds.iterator();
+        List<String> reorderedFullOrder = new ArrayList<>(this.orderedEntries.size());
         for (ChecklistCatalogEntry entry : this.orderedEntries) {
-            if (visibleSet.contains(entry.itemId())) {
+            if (visibleSet.contains(entry.entryId())) {
                 reorderedFullOrder.add(reorderedVisibleIterator.next());
             } else {
-                reorderedFullOrder.add(entry.itemId());
+                reorderedFullOrder.add(entry.entryId());
             }
         }
 
@@ -655,13 +655,42 @@ public final class ItemChecklistScreen extends Screen {
     private void updateLayout() {
         int listWidth = this.getListWidth();
         int listRight = this.getListRight();
-        int listTop = this.getListTop();
-        int stackableFilterX = listRight - SORT_BUTTON_WIDTH - STACKABLE_FILTER_WIDTH - TAB_GAP;
-        this.searchBox.setRectangle(Math.max(80, stackableFilterX - OUTER_MARGIN - TAB_GAP), FIELD_HEIGHT, OUTER_MARGIN, SEARCH_Y);
-        this.stackableOnlyCheckbox.setPosition(stackableFilterX, SEARCH_Y);
+        int previousControlsBottom = this.controlsBottom;
+        int inlineStackableFilterX = listRight - SORT_BUTTON_WIDTH - STACKABLE_FILTER_WIDTH - TAB_GAP;
+        int inlineSearchWidth = inlineStackableFilterX - OUTER_MARGIN - TAB_GAP;
+        if (inlineSearchWidth >= 100) {
+            this.controlsBottom = SEARCH_Y + FIELD_HEIGHT;
+            this.searchBox.setRectangle(inlineSearchWidth, FIELD_HEIGHT, OUTER_MARGIN, SEARCH_Y);
+        } else {
+            this.controlsBottom = SEARCH_Y + FIELD_HEIGHT * 2 + TAB_GAP;
+            this.searchBox.setRectangle(Math.max(80, listWidth - SORT_BUTTON_WIDTH - TAB_GAP), FIELD_HEIGHT, OUTER_MARGIN, SEARCH_Y);
+        }
+        this.stackableOnlyCheckbox.setPosition(this.getStackableFilterX(), this.getStackableFilterY());
         this.sortModeButton.setRectangle(SORT_BUTTON_WIDTH, FIELD_HEIGHT, listRight - SORT_BUTTON_WIDTH, SEARCH_Y);
+        if (previousControlsBottom != this.controlsBottom && !this.tabButtons.isEmpty()) {
+            this.rebuildTabButtons();
+        }
+        int listTop = this.getListTop();
         this.checklist.setRectangle(listWidth, this.height - listTop - OUTER_MARGIN, OUTER_MARGIN, listTop);
         this.layoutEditorWidgets();
+    }
+
+    private int getTabsY() {
+        return Math.max(TABS_Y, this.controlsBottom + TAB_GAP * 3);
+    }
+
+    private int getStackableFilterX() {
+        int listRight = this.getListRight();
+        int inlineStackableFilterX = listRight - SORT_BUTTON_WIDTH - STACKABLE_FILTER_WIDTH - TAB_GAP;
+        int inlineSearchWidth = inlineStackableFilterX - OUTER_MARGIN - TAB_GAP;
+        return inlineSearchWidth >= 100 ? inlineStackableFilterX : OUTER_MARGIN;
+    }
+
+    private int getStackableFilterY() {
+        int listRight = this.getListRight();
+        int inlineStackableFilterX = listRight - SORT_BUTTON_WIDTH - STACKABLE_FILTER_WIDTH - TAB_GAP;
+        int inlineSearchWidth = inlineStackableFilterX - OUTER_MARGIN - TAB_GAP;
+        return inlineSearchWidth >= 100 ? SEARCH_Y : SEARCH_Y + FIELD_HEIGHT + TAB_GAP;
     }
 
     private int getListTop() {
@@ -742,7 +771,7 @@ public final class ItemChecklistScreen extends Screen {
             ChecklistEntry entry = this.getEntryAtPosition(mouseX, mouseY);
             if (entry != null) {
                 if (button == 1) {
-                    ChecklistClientState.toggle(entry.entry().itemId());
+                    ChecklistClientState.toggle(entry.entry().entryId());
                     return true;
                 }
                 if (button == 0) {
@@ -786,7 +815,7 @@ public final class ItemChecklistScreen extends Screen {
         @Override
         public boolean mouseReleased(double mouseX, double mouseY, int button) {
             if (button == 0 && this.pressedEntry != null) {
-                ResourceLocation draggedItemId = this.draggedEntry == null ? null : this.draggedEntry.entry().itemId();
+                String draggedItemId = this.draggedEntry == null ? null : this.draggedEntry.entry().entryId();
                 int targetIndex = this.dragInsertIndex;
                 this.clearDragState();
                 if (draggedItemId != null) {
@@ -862,7 +891,7 @@ public final class ItemChecklistScreen extends Screen {
         }
 
         private void renderRowBackground(GuiGraphics guiGraphics, ChecklistCatalogEntry entry, int top, int left, int width, boolean hovered, boolean dragging) {
-            boolean checked = ChecklistClientState.isChecked(entry.itemId());
+            boolean checked = ChecklistClientState.isChecked(entry.entryId());
             int backgroundColor;
             int accentColor;
             if (dragging) {
@@ -878,7 +907,7 @@ public final class ItemChecklistScreen extends Screen {
         }
 
         private void renderRowContents(GuiGraphics guiGraphics, ChecklistCatalogEntry entry, int top, int left, int width) {
-            boolean checked = ChecklistClientState.isChecked(entry.itemId());
+            boolean checked = ChecklistClientState.isChecked(entry.entryId());
             int nameColor = checked ? 0xF2FFF2 : 0xFFFFFF;
             int metaColor = checked ? 0xD6F7D6 : 0xA8A8A8;
             int itemX = left + 8;
@@ -925,7 +954,7 @@ public final class ItemChecklistScreen extends Screen {
 
             @Override
             public Component getNarration() {
-                return ChecklistClientState.isChecked(this.entry.itemId())
+                return ChecklistClientState.isChecked(this.entry.entryId())
                         ? Component.translatable("itemcheck.screen.narration.checked", this.entry.displayName())
                         : Component.translatable("itemcheck.screen.narration.unchecked", this.entry.displayName());
             }

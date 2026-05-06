@@ -11,16 +11,17 @@ import net.z2six.itemcheck.ItemCheckNetworking;
 import net.z2six.itemcheck.ItemCheckSavedData;
 import net.z2six.itemcheck.Itemcheck;
 
-public record SetItemCheckedPayload(ResourceLocation itemId, boolean checked) implements CustomPacketPayload {
+public record SetItemCheckedPayload(String entryId, boolean checked) implements CustomPacketPayload {
+    private static final int MAX_ENTRY_ID_LENGTH = 256;
     public static final Type<SetItemCheckedPayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(Itemcheck.MODID, "set_item_checked"));
     public static final StreamCodec<RegistryFriendlyByteBuf, SetItemCheckedPayload> STREAM_CODEC = CustomPacketPayload.codec(SetItemCheckedPayload::write, SetItemCheckedPayload::new);
 
     public SetItemCheckedPayload(RegistryFriendlyByteBuf buffer) {
-        this(buffer.readResourceLocation(), buffer.readBoolean());
+        this(buffer.readUtf(MAX_ENTRY_ID_LENGTH), buffer.readBoolean());
     }
 
     private void write(RegistryFriendlyByteBuf buffer) {
-        buffer.writeResourceLocation(this.itemId);
+        buffer.writeUtf(this.entryId, MAX_ENTRY_ID_LENGTH);
         buffer.writeBoolean(this.checked);
     }
 
@@ -30,11 +31,11 @@ public record SetItemCheckedPayload(ResourceLocation itemId, boolean checked) im
     }
 
     public static void handle(SetItemCheckedPayload payload, IPayloadContext context) {
-        if (!(context.player() instanceof ServerPlayer player) || !ItemCheckCatalog.isTrackable(payload.itemId())) {
+        if (!(context.player() instanceof ServerPlayer player) || !ItemCheckCatalog.isTrackableEntryKey(payload.entryId())) {
             return;
         }
 
-        ItemCheckSavedData.get(player.serverLevel()).setChecked(payload.itemId(), payload.checked());
-        ItemCheckNetworking.broadcastUpdate(payload.itemId(), payload.checked());
+        ItemCheckSavedData.get(player.serverLevel()).setChecked(payload.entryId(), payload.checked());
+        ItemCheckNetworking.broadcastUpdate(payload.entryId(), payload.checked());
     }
 }

@@ -72,6 +72,21 @@ public final class ItemCheckCatalog {
         return BuiltInRegistries.ITEM.containsKey(itemId) && isTrackable(BuiltInRegistries.ITEM.get(itemId));
     }
 
+    public static boolean isTrackableEntryKey(String entryKey) {
+        if (entryKey == null || entryKey.isBlank()) {
+            return false;
+        }
+
+        String itemId = entryKey;
+        int variantSeparator = entryKey.indexOf('#');
+        if (variantSeparator >= 0) {
+            itemId = entryKey.substring(0, variantSeparator);
+        }
+
+        ResourceLocation parsedItemId = ResourceLocation.tryParse(itemId);
+        return parsedItemId != null && isTrackable(parsedItemId);
+    }
+
     public static List<String> getItemTags(Item item) {
         return stringifyTags(BuiltInRegistries.ITEM.wrapAsHolder(item).tags());
     }
