@@ -81,6 +81,7 @@ public final class ItemChecklistScreen extends Screen {
     private FilterEditorList filterEditorList;
     private int selectedCustomTabIndex = -1;
     private boolean editorOpen;
+    private int tabButtonsBottom = TABS_Y + TAB_HEIGHT;
     private List<ChecklistFilterTab> renderedTabs = List.of();
     private ChecklistTabViewState renderedAllTabViewState = ChecklistTabViewState.defaultState();
     private List<ChecklistCatalogEntry> orderedEntries = List.of();
@@ -141,8 +142,9 @@ public final class ItemChecklistScreen extends Screen {
     @Override
     public void renderBackground(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         this.renderTransparentBackground(guiGraphics);
-        guiGraphics.fill(0, 0, this.width, LIST_TOP - 10, 0xD0121212);
-        guiGraphics.fill(0, LIST_TOP - 10, this.width, LIST_TOP - 9, 0xFF3A3A3A);
+        int listTop = this.getListTop();
+        guiGraphics.fill(0, 0, this.width, listTop - 10, 0xD0121212);
+        guiGraphics.fill(0, listTop - 10, this.width, listTop - 9, 0xFF3A3A3A);
 
         if (this.editorOpen) {
             int editorX = this.getEditorX();
@@ -160,9 +162,17 @@ public final class ItemChecklistScreen extends Screen {
         guiGraphics.drawString(this.font, Component.translatable("itemcheck.screen.instructions"), OUTER_MARGIN, INSTRUCTIONS_Y, 0xD0D0D0, false);
 
         String searchQuery = this.getSearchQuery();
+        boolean hideNonStackable = this.getSelectedViewState().hideNonStackable();
+        long progressChecked = this.catalog.stream()
+                .filter(entry -> !hideNonStackable || entry.maxStackSize() > 1)
+                .filter(entry -> ChecklistClientState.isChecked(entry.itemId()))
+                .count();
+        long progressTotal = this.catalog.stream()
+                .filter(entry -> !hideNonStackable || entry.maxStackSize() > 1)
+                .count();
         Component progress = ChecklistClientState.isSynced()
-                ? Component.translatable("itemcheck.screen.progress", ChecklistClientState.getCheckedCount(), this.catalog.size())
-                : Component.translatable("itemcheck.screen.progress_syncing", ChecklistClientState.getCheckedCount(), this.catalog.size());
+                ? Component.translatable("itemcheck.screen.progress", progressChecked, progressTotal)
+                : Component.translatable("itemcheck.screen.progress_syncing", progressChecked, progressTotal);
         guiGraphics.drawString(this.font, progress, OUTER_MARGIN, PROGRESS_Y, 0x9EF79E, false);
         if (!searchQuery.isBlank()) {
             guiGraphics.drawString(this.font, Component.translatable("itemcheck.search.active", searchQuery), OUTER_MARGIN + 220, PROGRESS_Y, 0xC6C6C6, false);
@@ -388,6 +398,7 @@ public final class ItemChecklistScreen extends Screen {
             this.tabButtons.add(button);
             x += buttonWidth + TAB_GAP;
         }
+        this.tabButtonsBottom = y + TAB_HEIGHT;
     }
 
     private void selectTab(int customIndex) {
@@ -644,12 +655,19 @@ public final class ItemChecklistScreen extends Screen {
     private void updateLayout() {
         int listWidth = this.getListWidth();
         int listRight = this.getListRight();
+        int listTop = this.getListTop();
         int stackableFilterX = listRight - SORT_BUTTON_WIDTH - STACKABLE_FILTER_WIDTH - TAB_GAP;
         this.searchBox.setRectangle(Math.max(80, stackableFilterX - OUTER_MARGIN - TAB_GAP), FIELD_HEIGHT, OUTER_MARGIN, SEARCH_Y);
         this.stackableOnlyCheckbox.setPosition(stackableFilterX, SEARCH_Y);
         this.sortModeButton.setRectangle(SORT_BUTTON_WIDTH, FIELD_HEIGHT, listRight - SORT_BUTTON_WIDTH, SEARCH_Y);
-        this.checklist.setRectangle(listWidth, this.height - LIST_TOP - OUTER_MARGIN, OUTER_MARGIN, LIST_TOP);
+        this.checklist.setRectangle(listWidth, this.height - listTop - OUTER_MARGIN, OUTER_MARGIN, listTop);
         this.layoutEditorWidgets();
+    }
+
+    private int getListTop() {
+        int preferredTop = Math.max(LIST_TOP, this.tabButtonsBottom + TAB_GAP * 3);
+        int latestUsableTop = Math.max(LIST_TOP, this.height - OUTER_MARGIN - ROW_HEIGHT);
+        return Math.min(preferredTop, latestUsableTop);
     }
 
     private void layoutEditorWidgets() {

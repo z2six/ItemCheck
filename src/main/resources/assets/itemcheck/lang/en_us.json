@@ -1,6 +1,6 @@
 {
   "itemcheck.screen.title": "ItemCheck",
-  "itemcheck.screen.instructions": "Click a row to toggle it. Hover a row to see all item and block tags. Use the mouse wheel or drag the scrollbar to scroll.",
+  "itemcheck.screen.instructions": "Click a row to toggle it. Right-click a custom tab to edit or move it. Hover a row to see all item and block tags.",
   "itemcheck.screen.progress": "Checked %s / %s",
   "itemcheck.screen.progress_syncing": "Checked %s / %s (syncing with world data...)",
   "itemcheck.screen.narration.checked": "%s checked",
