@@ -82,6 +82,14 @@ public final class ChecklistClientState {
         }
 
         boolean checked = !isChecked(entryId);
+        setChecked(entryId, checked);
+    }
+
+    public static void setChecked(String entryId, boolean checked) {
+        if (Minecraft.getInstance().getConnection() == null) {
+            return;
+        }
+
         applyDelta(entryId, checked);
         PacketDistributor.sendToServer(new SetItemCheckedPayload(entryId, checked));
     }

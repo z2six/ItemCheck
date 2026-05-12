@@ -13,10 +13,13 @@ import net.z2six.itemcheck.network.SaveFilterTabsPayload;
 import net.z2six.itemcheck.network.SetItemCheckedPayload;
 import net.z2six.itemcheck.network.SyncChecklistStatePayload;
 import net.z2six.itemcheck.network.UpdateItemCheckedPayload;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Mod(Itemcheck.MODID)
 public final class Itemcheck {
     public static final String MODID = "itemcheck";
+    public static final Logger LOGGER = LoggerFactory.getLogger(MODID);
     private static final String NETWORK_VERSION = "1";
 
     public Itemcheck(IEventBus modEventBus) {

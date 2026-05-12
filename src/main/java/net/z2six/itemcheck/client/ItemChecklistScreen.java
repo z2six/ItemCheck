@@ -8,6 +8,16 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -25,6 +35,7 @@ import net.z2six.itemcheck.ChecklistFilterTab;
 import net.z2six.itemcheck.ChecklistFilterType;
 import net.z2six.itemcheck.ChecklistSortMode;
 import net.z2six.itemcheck.ChecklistTabViewState;
+import net.z2six.itemcheck.Itemcheck;
 
 public final class ItemChecklistScreen extends Screen {
     private static final int ROW_HEIGHT = 32;
@@ -42,6 +53,10 @@ public final class ItemChecklistScreen extends Screen {
     private static final int LABEL_COLOR = 0xFFE2E2E2;
     private static final int SORT_BUTTON_WIDTH = 116;
     private static final int STACKABLE_FILTER_WIDTH = 170;
+    private static final int EXPORT_BUTTON_WIDTH = 92;
+    private static final int IMPORT_BUTTON_WIDTH = 92;
+    private static final Path EXPORT_PATH = Path.of("itemcheck_export.json");
+    private static final Gson JSON = new GsonBuilder().setPrettyPrinting().create();
     private static final int EDITOR_TITLE_Y = SEARCH_Y + 14;
     private static final int EDITOR_SUBTITLE_Y = SEARCH_Y + 30;
     private static final int EDITOR_BUTTONS_Y = SEARCH_Y + 64;
@@ -75,6 +90,8 @@ public final class ItemChecklistScreen extends Screen {
     private Button moveLeftButton;
     private Button moveRightButton;
     private Button sortModeButton;
+    private Button exportButton;
+    private Button importButton;
     private Button addIncludeFilterButton;
     private Button addExcludeFilterButton;
     private FilterEditorList filterEditorList;
@@ -107,6 +124,12 @@ public final class ItemChecklistScreen extends Screen {
         ));
         this.sortModeButton = this.addRenderableWidget(Button.builder(this.getSortButtonLabel(), button -> this.toggleSortMode())
                 .bounds(this.getListRight() - SORT_BUTTON_WIDTH, SEARCH_Y, SORT_BUTTON_WIDTH, FIELD_HEIGHT)
+                .build());
+        this.exportButton = this.addRenderableWidget(Button.builder(Component.translatable("itemcheck.export"), button -> this.exportJson())
+                .bounds(OUTER_MARGIN, PROGRESS_Y, EXPORT_BUTTON_WIDTH, FIELD_HEIGHT)
+                .build());
+        this.importButton = this.addRenderableWidget(Button.builder(Component.translatable("itemcheck.import"), button -> this.importJson())
+                .bounds(OUTER_MARGIN + EXPORT_BUTTON_WIDTH + TAB_GAP, PROGRESS_Y, IMPORT_BUTTON_WIDTH, FIELD_HEIGHT)
                 .build());
         this.createStackableOnlyCheckbox(this.getSelectedViewState().hideNonStackable());
 
@@ -173,9 +196,9 @@ public final class ItemChecklistScreen extends Screen {
         Component progress = ChecklistClientState.isSynced()
                 ? Component.translatable("itemcheck.screen.progress", progressChecked, progressTotal)
                 : Component.translatable("itemcheck.screen.progress_syncing", progressChecked, progressTotal);
-        guiGraphics.drawString(this.font, progress, OUTER_MARGIN, PROGRESS_Y, 0x9EF79E, false);
+        guiGraphics.drawString(this.font, progress, OUTER_MARGIN + EXPORT_BUTTON_WIDTH + IMPORT_BUTTON_WIDTH + TAB_GAP * 3, PROGRESS_Y + 6, 0x9EF79E, false);
         if (!searchQuery.isBlank()) {
-            guiGraphics.drawString(this.font, Component.translatable("itemcheck.search.active", searchQuery), OUTER_MARGIN + 220, PROGRESS_Y, 0xC6C6C6, false);
+            guiGraphics.drawString(this.font, Component.translatable("itemcheck.search.active", searchQuery), OUTER_MARGIN + 410, PROGRESS_Y + 6, 0xC6C6C6, false);
         }
 
         if (this.editorOpen) {
@@ -346,6 +369,226 @@ public final class ItemChecklistScreen extends Screen {
             case BLOCK_TAG -> Component.translatable("itemcheck.editor.block_tag_filter_hint");
             case GROUP -> Component.translatable("itemcheck.editor.group_filter_hint");
         };
+    }
+
+    private void exportJson() {
+        JsonObject root = new JsonObject();
+        root.addProperty("schema", "itemcheck-planning-v1");
+        root.addProperty("exportedFrom", "ItemCheck");
+
+        JsonArray tabs = new JsonArray();
+        tabs.add(this.exportTab(Component.translatable("itemcheck.tab.all").getString(), -1, ChecklistClientState.getAllTabViewState(), ChecklistClientState.getFilterTabs()));
+        List<ChecklistFilterTab> filterTabs = ChecklistClientState.getFilterTabs();
+        for (int index = 0; index < filterTabs.size(); index++) {
+            tabs.add(this.exportTab(filterTabs.get(index).name(), index, filterTabs.get(index).viewState(), filterTabs));
+        }
+        root.add("tabs", tabs);
+
+        try {
+            Files.writeString(EXPORT_PATH, JSON.toJson(root), StandardCharsets.UTF_8);
+        } catch (Exception exception) {
+            Itemcheck.LOGGER.warn("Failed to export ItemCheck JSON", exception);
+        }
+    }
+
+    private JsonObject exportTab(String name, int customTabIndex, ChecklistTabViewState viewState, List<ChecklistFilterTab> tabs) {
+        JsonObject tab = new JsonObject();
+        tab.addProperty("name", name);
+        tab.addProperty("type", customTabIndex < 0 ? "all" : "custom");
+        tab.add("view", exportViewState(viewState));
+        if (customTabIndex >= 0 && customTabIndex < tabs.size()) {
+            ChecklistFilterTab filterTab = tabs.get(customTabIndex);
+            tab.addProperty("noDuplicates", filterTab.noDuplicates());
+            tab.add("filters", exportFilters(filterTab.filters()));
+        }
+
+        JsonArray items = new JsonArray();
+        this.entriesForTab(customTabIndex, viewState, tabs).forEach(entry -> items.add(this.exportEntry(entry)));
+        tab.add("items", items);
+        return tab;
+    }
+
+    private JsonObject exportEntry(ChecklistCatalogEntry entry) {
+        JsonObject item = new JsonObject();
+        item.addProperty("entryId", entry.entryId());
+        item.addProperty("itemId", entry.itemIdString());
+        item.addProperty("name", entry.displayName());
+        item.addProperty("checked", ChecklistClientState.isChecked(entry.entryId()));
+        item.addProperty("maxStackSize", entry.maxStackSize());
+        item.addProperty("group", entry.groupLabel());
+        item.addProperty("primarySortTag", entry.primarySortTag());
+        item.add("itemTags", exportStringList(entry.itemTags()));
+        item.add("blockTags", exportStringList(entry.blockTags()));
+        return item;
+    }
+
+    private List<ChecklistCatalogEntry> entriesForTab(int customTabIndex, ChecklistTabViewState viewState, List<ChecklistFilterTab> tabs) {
+        return this.applyOrdering(this.catalog.stream()
+                .filter(entry -> !viewState.hideNonStackable() || entry.maxStackSize() > 1)
+                .filter(entry -> customTabIndex < 0 || customTabIndex >= tabs.size() || ChecklistFilters.matchesTab(entry, tabs.get(customTabIndex)))
+                .filter(entry -> customTabIndex < 0 || ChecklistFilters.survivesDuplicateFilter(entry, tabs, customTabIndex))
+                .toList(), viewState);
+    }
+
+    private static JsonObject exportViewState(ChecklistTabViewState viewState) {
+        JsonObject view = new JsonObject();
+        view.addProperty("sortMode", viewState.sortMode().name());
+        view.addProperty("hideNonStackable", viewState.hideNonStackable());
+        view.add("manualOrder", exportStringList(viewState.manualOrder()));
+        return view;
+    }
+
+    private static JsonArray exportFilters(List<ChecklistFilterRule> filters) {
+        JsonArray array = new JsonArray();
+        for (ChecklistFilterRule filter : filters) {
+            JsonObject object = new JsonObject();
+            object.addProperty("action", filter.action().name());
+            object.addProperty("type", filter.type().name());
+            object.addProperty("expression", filter.expression());
+            array.add(object);
+        }
+        return array;
+    }
+
+    private static JsonArray exportStringList(List<String> values) {
+        JsonArray array = new JsonArray();
+        values.forEach(value -> array.add(new JsonPrimitive(value)));
+        return array;
+    }
+
+    private void importJson() {
+        try {
+            if (!Files.exists(EXPORT_PATH)) {
+                return;
+            }
+
+            JsonObject root = JsonParser.parseString(Files.readString(EXPORT_PATH, StandardCharsets.UTF_8)).getAsJsonObject();
+            JsonArray tabsJson = root.has("tabs") && root.get("tabs").isJsonArray() ? root.getAsJsonArray("tabs") : new JsonArray();
+            ChecklistTabViewState allViewState = ChecklistClientState.getAllTabViewState();
+            List<ChecklistFilterTab> importedTabs = new ArrayList<>();
+
+            for (JsonElement element : tabsJson) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+
+                JsonObject tabJson = element.getAsJsonObject();
+                String type = readString(tabJson, "type", "custom");
+                ChecklistTabViewState viewState = importViewState(tabJson.has("view") && tabJson.get("view").isJsonObject()
+                        ? tabJson.getAsJsonObject("view")
+                        : new JsonObject());
+                if ("all".equalsIgnoreCase(type)) {
+                    allViewState = viewState;
+                } else {
+                    importedTabs.add(importTab(tabJson, viewState));
+                }
+                importCheckedStates(tabJson);
+            }
+
+            this.persistState(allViewState, importedTabs, this.selectedCustomTabIndex >= importedTabs.size() ? importedTabs.size() - 1 : this.selectedCustomTabIndex);
+        } catch (Exception exception) {
+            Itemcheck.LOGGER.warn("Failed to import ItemCheck JSON", exception);
+        }
+    }
+
+    private ChecklistFilterTab importTab(JsonObject tabJson, ChecklistTabViewState viewState) {
+        String name = readString(tabJson, "name", "Imported Tab");
+        List<ChecklistFilterRule> filters = importFilters(tabJson.has("filters") && tabJson.get("filters").isJsonArray() ? tabJson.getAsJsonArray("filters") : new JsonArray());
+        List<String> explicitEntryIds = importEntryIds(tabJson);
+        if (!explicitEntryIds.isEmpty() && viewState.manualOrder().isEmpty()) {
+            viewState = new ChecklistTabViewState(viewState.sortMode(), explicitEntryIds, viewState.hideNonStackable());
+        }
+        return new ChecklistFilterTab(name, filters, explicitEntryIds, readBoolean(tabJson, "noDuplicates", false), viewState);
+    }
+
+    private static ChecklistTabViewState importViewState(JsonObject viewJson) {
+        ChecklistSortMode sortMode = ChecklistSortMode.GROUP;
+        try {
+            sortMode = ChecklistSortMode.valueOf(readString(viewJson, "sortMode", ChecklistSortMode.GROUP.name()));
+        } catch (IllegalArgumentException ignored) {
+        }
+        return new ChecklistTabViewState(sortMode, readStringArray(viewJson.get("manualOrder")), readBoolean(viewJson, "hideNonStackable", true));
+    }
+
+    private static List<ChecklistFilterRule> importFilters(JsonArray filtersJson) {
+        List<ChecklistFilterRule> filters = new ArrayList<>();
+        for (JsonElement element : filtersJson) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+
+            JsonObject filterJson = element.getAsJsonObject();
+            try {
+                filters.add(new ChecklistFilterRule(
+                        ChecklistFilterAction.valueOf(readString(filterJson, "action", ChecklistFilterAction.INCLUDE.name())),
+                        ChecklistFilterType.valueOf(readString(filterJson, "type", ChecklistFilterType.ITEM_NAME.name())),
+                        readString(filterJson, "expression", "")
+                ));
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        return filters;
+    }
+
+    private static List<String> importEntryIds(JsonObject tabJson) {
+        if (!tabJson.has("items") || !tabJson.get("items").isJsonArray()) {
+            return List.of();
+        }
+
+        List<String> entryIds = new ArrayList<>();
+        for (JsonElement element : tabJson.getAsJsonArray("items")) {
+            if (element.isJsonObject()) {
+                String entryId = readString(element.getAsJsonObject(), "entryId", "");
+                if (!entryId.isBlank()) {
+                    entryIds.add(entryId);
+                }
+            } else if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()) {
+                entryIds.add(element.getAsString());
+            }
+        }
+        return entryIds;
+    }
+
+    private static void importCheckedStates(JsonObject tabJson) {
+        if (!tabJson.has("items") || !tabJson.get("items").isJsonArray()) {
+            return;
+        }
+
+        for (JsonElement element : tabJson.getAsJsonArray("items")) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+
+            JsonObject itemJson = element.getAsJsonObject();
+            if (itemJson.has("checked")) {
+                String entryId = readString(itemJson, "entryId", "");
+                if (!entryId.isBlank()) {
+                    ChecklistClientState.setChecked(entryId, readBoolean(itemJson, "checked", false));
+                }
+            }
+        }
+    }
+
+    private static List<String> readStringArray(JsonElement element) {
+        if (element == null || !element.isJsonArray()) {
+            return List.of();
+        }
+
+        List<String> values = new ArrayList<>();
+        for (JsonElement item : element.getAsJsonArray()) {
+            if (item.isJsonPrimitive() && item.getAsJsonPrimitive().isString()) {
+                values.add(item.getAsString());
+            }
+        }
+        return values;
+    }
+
+    private static String readString(JsonObject object, String key, String fallback) {
+        return object.has(key) && object.get(key).isJsonPrimitive() ? object.get(key).getAsString() : fallback;
+    }
+
+    private static boolean readBoolean(JsonObject object, String key, boolean fallback) {
+        return object.has(key) && object.get(key).isJsonPrimitive() ? object.get(key).getAsBoolean() : fallback;
     }
 
     private void rebuildTabButtons() {
@@ -541,6 +784,9 @@ public final class ItemChecklistScreen extends Screen {
         return new ChecklistFilterTab(
                 this.tabNameBox.getValue(),
                 this.filterEditorList.readRules(),
+                this.selectedCustomTabIndex >= 0 && this.selectedCustomTabIndex < this.renderedTabs.size()
+                        ? this.renderedTabs.get(this.selectedCustomTabIndex).explicitEntryIds()
+                        : List.of(),
                 this.noDuplicatesCheckbox.selected(),
                 viewState
         );
@@ -555,7 +801,7 @@ public final class ItemChecklistScreen extends Screen {
         List<ChecklistFilterTab> tabs = new ArrayList<>(ChecklistClientState.getFilterTabs());
         if (this.selectedCustomTabIndex >= 0 && this.selectedCustomTabIndex < tabs.size()) {
             ChecklistFilterTab currentTab = tabs.get(this.selectedCustomTabIndex);
-            tabs.set(this.selectedCustomTabIndex, new ChecklistFilterTab(currentTab.name(), currentTab.filters(), currentTab.noDuplicates(), updatedViewState));
+            tabs.set(this.selectedCustomTabIndex, new ChecklistFilterTab(currentTab.name(), currentTab.filters(), currentTab.explicitEntryIds(), currentTab.noDuplicates(), updatedViewState));
         } else {
             allTabViewState = updatedViewState;
         }

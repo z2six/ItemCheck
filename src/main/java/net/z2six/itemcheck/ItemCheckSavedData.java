@@ -73,7 +73,7 @@ public final class ItemCheckSavedData extends SavedData {
     public void setFilterTabs(List<ChecklistFilterTab> tabs) {
         List<ChecklistFilterTab> sanitizedTabs = tabs.stream()
                 .limit(MAX_FILTER_TABS)
-                .map(tab -> new ChecklistFilterTab(tab.name(), tab.filters(), tab.noDuplicates(), tab.viewState()))
+                .map(tab -> new ChecklistFilterTab(tab.name(), tab.filters(), tab.explicitEntryIds(), tab.noDuplicates(), tab.viewState()))
                 .toList();
 
         if (!this.filterTabs.equals(sanitizedTabs)) {

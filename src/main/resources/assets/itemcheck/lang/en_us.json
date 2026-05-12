@@ -7,6 +7,8 @@
   "itemcheck.screen.narration.unchecked": "%s unchecked",
   "itemcheck.search.hint": "Search items, ids, groups, or tags",
   "itemcheck.search.active": "Search: %s",
+  "itemcheck.export": "Export JSON",
+  "itemcheck.import": "Import JSON",
   "itemcheck.filter.hide_non_stackable": "Hide non-stackable",
   "itemcheck.sort.grouped": "Sort: Group",
   "itemcheck.sort.a_to_z": "Sort: A-Z",

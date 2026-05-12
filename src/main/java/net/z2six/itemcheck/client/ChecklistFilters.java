@@ -13,6 +13,10 @@ public final class ChecklistFilters {
     }
 
     public static boolean matchesTab(ChecklistCatalogEntry entry, ChecklistFilterTab tab) {
+        if (!tab.explicitEntryIds().isEmpty()) {
+            return tab.explicitEntryIds().contains(entry.entryId());
+        }
+
         List<ChecklistFilterRule> includeRules = tab.filters().stream()
                 .filter(rule -> rule.action() == ChecklistFilterAction.INCLUDE && !rule.expression().isBlank())
                 .toList();
