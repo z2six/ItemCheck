@@ -48,6 +48,7 @@ public final class ItemChecklistScreen extends Screen {
     private static final int TABS_Y = 94;
     private static final int TAB_HEIGHT = 20;
     private static final int TAB_GAP = 4;
+    private static final int TAB_NAV_WIDTH = 22;
     private static final int LIST_TOP = 174;
     private static final int FIELD_HEIGHT = 20;
     private static final int LABEL_COLOR = 0xFFE2E2E2;
@@ -99,6 +100,7 @@ public final class ItemChecklistScreen extends Screen {
     private boolean editorOpen;
     private int controlsBottom = SEARCH_Y + FIELD_HEIGHT;
     private int tabButtonsBottom = TABS_Y + TAB_HEIGHT;
+    private int tabScrollIndex;
     private List<ChecklistFilterTab> renderedTabs = List.of();
     private ChecklistTabViewState renderedAllTabViewState = ChecklistTabViewState.defaultState();
     private List<ChecklistCatalogEntry> orderedEntries = List.of();
@@ -599,7 +601,6 @@ public final class ItemChecklistScreen extends Screen {
 
         int left = OUTER_MARGIN;
         int right = this.getListRight();
-        int x = left;
         int y = this.getTabsY();
 
         List<Component> labels = new ArrayList<>();
@@ -607,18 +608,37 @@ public final class ItemChecklistScreen extends Screen {
         this.renderedTabs.forEach(tab -> labels.add(Component.literal(tab.name())));
         labels.add(Component.translatable("itemcheck.tab.new"));
 
-        for (int index = 0; index < labels.size(); index++) {
+        int totalTabs = labels.size();
+        this.clampTabScrollIndex(totalTabs);
+        int tabAreaLeft = left + TAB_NAV_WIDTH + TAB_GAP;
+        int tabAreaRight = right - TAB_NAV_WIDTH - TAB_GAP;
+        int x = tabAreaLeft;
+
+        Button leftButton = this.addRenderableWidget(Button.builder(Component.literal("<"), button -> this.scrollTabs(-1))
+                .bounds(left, y, TAB_NAV_WIDTH, TAB_HEIGHT)
+                .build(builder -> new TabNavButton(builder)));
+        leftButton.active = this.tabScrollIndex > 0;
+        this.tabButtons.add(leftButton);
+
+        Button rightButton = this.addRenderableWidget(Button.builder(Component.literal(">"), button -> this.scrollTabs(1))
+                .bounds(right - TAB_NAV_WIDTH, y, TAB_NAV_WIDTH, TAB_HEIGHT)
+                .build(builder -> new TabNavButton(builder)));
+        this.tabButtons.add(rightButton);
+
+        int nextHiddenIndex = totalTabs;
+        for (int index = this.tabScrollIndex; index < totalTabs; index++) {
             Component label = labels.get(index);
             boolean isNewButton = index == labels.size() - 1;
             boolean selected = !isNewButton && index - 1 == this.selectedCustomTabIndex;
-            Component displayLabel = selected ? Component.literal("[" + label.getString() + "]") : label;
+            Component displayLabel = label;
             int buttonWidth = Math.max(56, Math.min(110, this.font.width(displayLabel) + 20));
-            if (x + buttonWidth > right) {
-                x = left;
-                y += TAB_HEIGHT + TAB_GAP;
+            if (x + buttonWidth > tabAreaRight) {
+                nextHiddenIndex = index;
+                break;
             }
 
             final int customIndex = index - 1;
+            boolean complete = !isNewButton && this.isTabComplete(customIndex);
             Button button = this.addRenderableWidget(Button.builder(displayLabel, pressed -> {
                         if (isNewButton) {
                             this.createNewTab();
@@ -627,7 +647,7 @@ public final class ItemChecklistScreen extends Screen {
                         }
                     })
                     .bounds(x, y, buttonWidth, TAB_HEIGHT)
-                    .build(builder -> new Button(builder) {
+                    .build(builder -> new TabButton(builder, selected, complete, customIndex) {
                         @Override
                         public boolean mouseClicked(double mouseX, double mouseY, int button) {
                             if (button == 1 && this.visible && this.active && this.isMouseOver(mouseX, mouseY) && customIndex >= 0) {
@@ -641,13 +661,47 @@ public final class ItemChecklistScreen extends Screen {
             this.tabButtons.add(button);
             x += buttonWidth + TAB_GAP;
         }
+        rightButton.active = nextHiddenIndex < totalTabs;
         this.tabButtonsBottom = y + TAB_HEIGHT;
+    }
+
+    private void scrollTabs(int delta) {
+        this.tabScrollIndex += delta;
+        this.rebuildTabButtons();
+    }
+
+    private void clampTabScrollIndex(int totalTabs) {
+        this.tabScrollIndex = Math.max(0, Math.min(this.tabScrollIndex, Math.max(0, totalTabs - 1)));
+    }
+
+    private void ensureSelectedTabVisible() {
+        int selectedTabButtonIndex = this.selectedCustomTabIndex + 1;
+        if (selectedTabButtonIndex < 0) {
+            selectedTabButtonIndex = 0;
+        }
+        if (selectedTabButtonIndex < this.tabScrollIndex) {
+            this.tabScrollIndex = selectedTabButtonIndex;
+        }
+    }
+
+    private void revealSelectedTab() {
+        this.tabScrollIndex = Math.max(0, this.selectedCustomTabIndex + 1);
+    }
+
+    private boolean isTabComplete(int customIndex) {
+        List<ChecklistFilterTab> tabs = ChecklistClientState.getFilterTabs();
+        ChecklistTabViewState viewState = customIndex >= 0 && customIndex < tabs.size()
+                ? tabs.get(customIndex).viewState()
+                : ChecklistClientState.getAllTabViewState();
+        List<ChecklistCatalogEntry> entries = this.entriesForTab(customIndex, viewState, tabs);
+        return !entries.isEmpty() && entries.stream().allMatch(entry -> ChecklistClientState.isChecked(entry.entryId()));
     }
 
     private void selectTab(int customIndex) {
         this.checklist.clearDragState();
         this.setFocused(null);
         this.selectedCustomTabIndex = customIndex;
+        this.ensureSelectedTabVisible();
         if (customIndex < 0) {
             this.editorOpen = false;
             this.updateLayout();
@@ -661,6 +715,7 @@ public final class ItemChecklistScreen extends Screen {
         this.checklist.clearDragState();
         this.setFocused(null);
         this.selectedCustomTabIndex = customIndex;
+        this.ensureSelectedTabVisible();
         this.editorOpen = customIndex >= 0;
         this.updateLayout();
         this.rebuildTabButtons();
@@ -813,6 +868,7 @@ public final class ItemChecklistScreen extends Screen {
         this.renderedTabs = List.copyOf(tabs);
         this.renderedAllTabViewState = allTabViewState;
         this.selectedCustomTabIndex = newSelectedCustomTabIndex;
+        this.revealSelectedTab();
         if (this.selectedCustomTabIndex < 0) {
             this.editorOpen = false;
         }
@@ -971,6 +1027,68 @@ public final class ItemChecklistScreen extends Screen {
         this.filterEditorList.active = visible;
     }
 
+    private class TabButton extends Button {
+        private final boolean selected;
+        private final boolean complete;
+
+        private TabButton(Builder builder, boolean selected, boolean complete, int customIndex) {
+            super(builder);
+            this.selected = selected;
+            this.complete = complete;
+        }
+
+        @Override
+        public void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+            int backgroundColor;
+            int borderColor;
+            boolean hovered = this.isMouseOver(mouseX, mouseY);
+            if (this.complete) {
+                backgroundColor = hovered ? 0xCC2F7D32 : 0xAA245F27;
+                borderColor = 0xFF9BE79F;
+            } else if (this.selected) {
+                backgroundColor = hovered ? 0xCC3E5E82 : 0xAA2B4666;
+                borderColor = 0xFF8EC5FF;
+            } else {
+                backgroundColor = hovered ? 0xAA3A3A3A : 0x88242424;
+                borderColor = 0xFF6A6A6A;
+            }
+
+            ItemChecklistScreen.this.renderCustomButton(guiGraphics, this, backgroundColor, borderColor, this.active ? 0xFFFFFFFF : 0xFF8A8A8A);
+        }
+    }
+
+    private class TabNavButton extends Button {
+        private TabNavButton(Builder builder) {
+            super(builder);
+        }
+
+        @Override
+        public void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+            boolean hovered = this.active && this.isMouseOver(mouseX, mouseY);
+            int backgroundColor = this.active ? (hovered ? 0xAA3A3A3A : 0x88242424) : 0x55242424;
+            int borderColor = this.active ? 0xFF6A6A6A : 0xFF3A3A3A;
+            int textColor = this.active ? 0xFFFFFFFF : 0xFF777777;
+            ItemChecklistScreen.this.renderCustomButton(guiGraphics, this, backgroundColor, borderColor, textColor);
+        }
+    }
+
+    private void renderCustomButton(GuiGraphics guiGraphics, Button button, int backgroundColor, int borderColor, int textColor) {
+        int left = button.getX();
+        int top = button.getY();
+        int right = left + button.getWidth();
+        int bottom = top + button.getHeight();
+        guiGraphics.fill(left, top, right, bottom, backgroundColor);
+        guiGraphics.fill(left, top, right, top + 1, borderColor);
+        guiGraphics.fill(left, bottom - 1, right, bottom, borderColor);
+        guiGraphics.fill(left, top, left + 1, bottom, borderColor);
+        guiGraphics.fill(right - 1, top, right, bottom, borderColor);
+
+        String text = this.font.plainSubstrByWidth(button.getMessage().getString(), Math.max(10, button.getWidth() - 8));
+        int textX = left + (button.getWidth() - this.font.width(text)) / 2;
+        int textY = top + (button.getHeight() - 8) / 2 + 1;
+        guiGraphics.drawString(this.font, text, textX, textY, textColor, false);
+    }
+
     private final class ChecklistList extends ObjectSelectionList<ChecklistList.ChecklistEntry> {
         private final Minecraft minecraft;
         private ChecklistEntry pressedEntry;
@@ -1018,6 +1136,7 @@ public final class ItemChecklistScreen extends Screen {
             if (entry != null) {
                 if (button == 1) {
                     ChecklistClientState.toggle(entry.entry().entryId());
+                    ItemChecklistScreen.this.rebuildTabButtons();
                     return true;
                 }
                 if (button == 0) {
