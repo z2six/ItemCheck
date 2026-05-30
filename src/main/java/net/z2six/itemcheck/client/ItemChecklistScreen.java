@@ -58,6 +58,9 @@ public final class ItemChecklistScreen extends Screen {
     private static final int IMPORT_BUTTON_WIDTH = 92;
     private static final Path EXPORT_PATH = Path.of("itemcheck_export.json");
     private static final Gson JSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final Map<String, Double> REMEMBERED_LIST_SCROLL = new HashMap<>();
+    private static int rememberedSelectedCustomTabIndex = -1;
+    private static int rememberedTabScrollIndex;
     private static final int EDITOR_TITLE_Y = SEARCH_Y + 14;
     private static final int EDITOR_SUBTITLE_Y = SEARCH_Y + 30;
     private static final int EDITOR_BUTTONS_Y = SEARCH_Y + 64;
@@ -101,6 +104,7 @@ public final class ItemChecklistScreen extends Screen {
     private int controlsBottom = SEARCH_Y + FIELD_HEIGHT;
     private int tabButtonsBottom = TABS_Y + TAB_HEIGHT;
     private int tabScrollIndex;
+    private boolean restoreRememberedListScroll;
     private List<ChecklistFilterTab> renderedTabs = List.of();
     private ChecklistTabViewState renderedAllTabViewState = ChecklistTabViewState.defaultState();
     private List<ChecklistCatalogEntry> orderedEntries = List.of();
@@ -115,6 +119,12 @@ public final class ItemChecklistScreen extends Screen {
         ChecklistClientState.requestSync();
         this.renderedTabs = List.copyOf(ChecklistClientState.getFilterTabs());
         this.renderedAllTabViewState = ChecklistClientState.getAllTabViewState();
+        this.selectedCustomTabIndex = Math.min(rememberedSelectedCustomTabIndex, this.renderedTabs.size() - 1);
+        if (this.selectedCustomTabIndex < -1) {
+            this.selectedCustomTabIndex = -1;
+        }
+        this.tabScrollIndex = Math.max(0, rememberedTabScrollIndex);
+        this.restoreRememberedListScroll = true;
 
         int listWidth = this.getListWidth();
         this.searchBox = this.addRenderableWidget(this.createEditBox(
@@ -157,6 +167,7 @@ public final class ItemChecklistScreen extends Screen {
             if (this.selectedCustomTabIndex < 0) {
                 this.editorOpen = false;
             }
+            this.restoreRememberedListScroll = true;
             this.updateLayout();
             this.rebuildTabButtons();
             this.loadEditorFromSelection();
@@ -233,6 +244,7 @@ public final class ItemChecklistScreen extends Screen {
 
     @Override
     public void onClose() {
+        this.rememberCurrentViewState();
         Minecraft.getInstance().setScreen(null);
     }
 
@@ -688,6 +700,22 @@ public final class ItemChecklistScreen extends Screen {
         this.tabScrollIndex = Math.max(0, this.selectedCustomTabIndex + 1);
     }
 
+    private void rememberCurrentViewState() {
+        rememberedSelectedCustomTabIndex = this.selectedCustomTabIndex;
+        rememberedTabScrollIndex = this.tabScrollIndex;
+        if (this.checklist != null) {
+            REMEMBERED_LIST_SCROLL.put(this.getSelectedTabMemoryKey(), this.checklist.getScrollAmount());
+        }
+    }
+
+    private String getSelectedTabMemoryKey() {
+        if (this.selectedCustomTabIndex < 0 || this.selectedCustomTabIndex >= this.renderedTabs.size()) {
+            return "all";
+        }
+        ChecklistFilterTab tab = this.renderedTabs.get(this.selectedCustomTabIndex);
+        return this.selectedCustomTabIndex + ":" + tab.name();
+    }
+
     private boolean isTabComplete(int customIndex) {
         List<ChecklistFilterTab> tabs = ChecklistClientState.getFilterTabs();
         ChecklistTabViewState viewState = customIndex >= 0 && customIndex < tabs.size()
@@ -698,10 +726,12 @@ public final class ItemChecklistScreen extends Screen {
     }
 
     private void selectTab(int customIndex) {
+        this.rememberCurrentViewState();
         this.checklist.clearDragState();
         this.setFocused(null);
         this.selectedCustomTabIndex = customIndex;
         this.ensureSelectedTabVisible();
+        this.restoreRememberedListScroll = true;
         if (customIndex < 0) {
             this.editorOpen = false;
             this.updateLayout();
@@ -712,10 +742,12 @@ public final class ItemChecklistScreen extends Screen {
     }
 
     private void openEditorForTab(int customIndex) {
+        this.rememberCurrentViewState();
         this.checklist.clearDragState();
         this.setFocused(null);
         this.selectedCustomTabIndex = customIndex;
         this.ensureSelectedTabVisible();
+        this.restoreRememberedListScroll = true;
         this.editorOpen = customIndex >= 0;
         this.updateLayout();
         this.rebuildTabButtons();
@@ -762,6 +794,11 @@ public final class ItemChecklistScreen extends Screen {
         String searchQuery = this.getSearchQuery();
         List<ChecklistFilterTab> tabs = ChecklistClientState.getFilterTabs();
         ChecklistTabViewState selectedViewState = this.getSelectedViewState(tabs, ChecklistClientState.getAllTabViewState());
+        double targetScrollAmount = this.checklist == null ? 0.0 : this.checklist.getScrollAmount();
+        if (this.restoreRememberedListScroll) {
+            targetScrollAmount = REMEMBERED_LIST_SCROLL.getOrDefault(this.getSelectedTabMemoryKey(), 0.0);
+            this.restoreRememberedListScroll = false;
+        }
         this.orderedEntries = this.applyOrdering(this.catalog.stream()
                 .filter(entry -> !selectedViewState.hideNonStackable() || entry.maxStackSize() > 1)
                 .filter(entry -> this.matchesCurrentTab(entry, tabs))
@@ -773,7 +810,7 @@ public final class ItemChecklistScreen extends Screen {
         if (this.stackableOnlyCheckbox.selected() != selectedViewState.hideNonStackable()) {
             this.createStackableOnlyCheckbox(selectedViewState.hideNonStackable());
         }
-        this.checklist.setCatalogEntries(this.visibleEntries);
+        this.checklist.setCatalogEntries(this.visibleEntries, targetScrollAmount);
     }
 
     private boolean matchesCurrentTab(ChecklistCatalogEntry entry, List<ChecklistFilterTab> tabs) {
@@ -869,6 +906,7 @@ public final class ItemChecklistScreen extends Screen {
         this.renderedAllTabViewState = allTabViewState;
         this.selectedCustomTabIndex = newSelectedCustomTabIndex;
         this.revealSelectedTab();
+        this.restoreRememberedListScroll = false;
         if (this.selectedCustomTabIndex < 0) {
             this.editorOpen = false;
         }
@@ -1120,10 +1158,10 @@ public final class ItemChecklistScreen extends Screen {
             return this.getRight() - 6;
         }
 
-        private void setCatalogEntries(List<ChecklistCatalogEntry> entries) {
+        private void setCatalogEntries(List<ChecklistCatalogEntry> entries, double scrollAmount) {
             this.clearDragState();
             this.replaceEntries(entries.stream().map(ChecklistEntry::new).toList());
-            this.setScrollAmount(0.0);
+            this.setScrollAmount(scrollAmount);
         }
 
         private ChecklistEntry getHoveredEntry() {
