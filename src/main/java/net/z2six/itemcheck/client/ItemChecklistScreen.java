@@ -11,6 +11,7 @@ import java.util.Set;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import com.mojang.blaze3d.platform.InputConstants;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -72,6 +73,7 @@ public final class ItemChecklistScreen extends Screen {
     private static final int NO_DUPLICATES_Y = SEARCH_Y + 212;
     private static final int FILTER_LIST_TOP = SEARCH_Y + 240;
     private static final int FILTER_ROW_HEIGHT = 52;
+    private static final int MAX_HISTORY_ENTRIES = 100;
 
     private static final Comparator<ChecklistCatalogEntry> GROUP_SORT = Comparator
             .comparing(ChecklistCatalogEntry::primarySortTag, String.CASE_INSENSITIVE_ORDER)
@@ -105,10 +107,13 @@ public final class ItemChecklistScreen extends Screen {
     private int tabButtonsBottom = TABS_Y + TAB_HEIGHT;
     private int tabScrollIndex;
     private boolean restoreRememberedListScroll;
+    private boolean applyingHistory;
     private List<ChecklistFilterTab> renderedTabs = List.of();
     private ChecklistTabViewState renderedAllTabViewState = ChecklistTabViewState.defaultState();
     private List<ChecklistCatalogEntry> orderedEntries = List.of();
     private List<ChecklistCatalogEntry> visibleEntries = List.of();
+    private final List<HistoryAction> undoStack = new ArrayList<>();
+    private final List<HistoryAction> redoStack = new ArrayList<>();
 
     public ItemChecklistScreen() {
         super(Component.translatable("itemcheck.screen.title"));
@@ -243,8 +248,24 @@ public final class ItemChecklistScreen extends Screen {
     }
 
     @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (Screen.hasControlDown() && keyCode == InputConstants.KEY_Z) {
+            this.undoLastAction();
+            return true;
+        }
+        if (Screen.hasControlDown() && keyCode == InputConstants.KEY_Y) {
+            this.redoLastAction();
+            return true;
+        }
+
+        return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    @Override
     public void onClose() {
         this.rememberCurrentViewState();
+        this.undoStack.clear();
+        this.redoStack.clear();
         Minecraft.getInstance().setScreen(null);
     }
 
@@ -901,6 +922,7 @@ public final class ItemChecklistScreen extends Screen {
     }
 
     private void persistState(ChecklistTabViewState allTabViewState, List<ChecklistFilterTab> tabs, int newSelectedCustomTabIndex) {
+        ScreenState before = this.applyingHistory ? null : this.captureScreenState();
         ChecklistClientState.saveFilterTabs(allTabViewState, tabs);
         this.renderedTabs = List.copyOf(tabs);
         this.renderedAllTabViewState = allTabViewState;
@@ -914,6 +936,160 @@ public final class ItemChecklistScreen extends Screen {
         this.rebuildTabButtons();
         this.loadEditorFromSelection();
         this.refreshVisibleEntries();
+        if (!this.applyingHistory) {
+            this.recordStateAction(before, this.captureScreenState());
+        }
+    }
+
+    private ScreenState captureScreenState() {
+        return new ScreenState(
+                copyViewState(ChecklistClientState.getAllTabViewState()),
+                copyTabs(ChecklistClientState.getFilterTabs()),
+                this.selectedCustomTabIndex,
+                this.editorOpen
+        );
+    }
+
+    private void applyScreenState(ScreenState state) {
+        this.applyingHistory = true;
+        try {
+            int selectedIndex = state.selectedCustomTabIndex();
+            if (selectedIndex >= state.tabs().size()) {
+                selectedIndex = state.tabs().isEmpty() ? -1 : state.tabs().size() - 1;
+            }
+            this.persistState(state.allTabViewState(), state.tabs(), selectedIndex);
+            this.editorOpen = state.editorOpen() && selectedIndex >= 0;
+            this.updateLayout();
+            this.rebuildTabButtons();
+            this.loadEditorFromSelection();
+            this.refreshVisibleEntries();
+        } finally {
+            this.applyingHistory = false;
+        }
+    }
+
+    private void recordStateAction(ScreenState before, ScreenState after) {
+        if (before == null || before.equals(after)) {
+            return;
+        }
+        this.recordAction(new HistoryAction() {
+            @Override
+            public void undo() {
+                ItemChecklistScreen.this.applyScreenState(before);
+            }
+
+            @Override
+            public void redo() {
+                ItemChecklistScreen.this.applyScreenState(after);
+            }
+        });
+    }
+
+    private void recordCheckedAction(String entryId, boolean before, boolean after) {
+        if (before == after || this.applyingHistory) {
+            return;
+        }
+        this.recordAction(new HistoryAction() {
+            @Override
+            public void undo() {
+                ItemChecklistScreen.this.setCheckedFromHistory(entryId, before);
+            }
+
+            @Override
+            public void redo() {
+                ItemChecklistScreen.this.setCheckedFromHistory(entryId, after);
+            }
+        });
+    }
+
+    private void recordEditorRulesAction(List<ChecklistFilterRule> before, List<ChecklistFilterRule> after) {
+        if (before.equals(after) || this.applyingHistory) {
+            return;
+        }
+        this.recordAction(new HistoryAction() {
+            @Override
+            public void undo() {
+                ItemChecklistScreen.this.setEditorRulesFromHistory(before);
+            }
+
+            @Override
+            public void redo() {
+                ItemChecklistScreen.this.setEditorRulesFromHistory(after);
+            }
+        });
+    }
+
+    private void setEditorRulesFromHistory(List<ChecklistFilterRule> rules) {
+        this.applyingHistory = true;
+        try {
+            if (this.editorOpen && this.filterEditorList != null) {
+                this.filterEditorList.setRules(rules);
+            }
+        } finally {
+            this.applyingHistory = false;
+        }
+    }
+
+    private void recordAction(HistoryAction action) {
+        this.undoStack.add(action);
+        if (this.undoStack.size() > MAX_HISTORY_ENTRIES) {
+            this.undoStack.remove(0);
+        }
+        this.redoStack.clear();
+    }
+
+    private void undoLastAction() {
+        if (this.undoStack.isEmpty()) {
+            return;
+        }
+        HistoryAction action = this.undoStack.remove(this.undoStack.size() - 1);
+        action.undo();
+        this.redoStack.add(action);
+    }
+
+    private void redoLastAction() {
+        if (this.redoStack.isEmpty()) {
+            return;
+        }
+        HistoryAction action = this.redoStack.remove(this.redoStack.size() - 1);
+        action.redo();
+        this.undoStack.add(action);
+    }
+
+    private void setCheckedFromHistory(String entryId, boolean checked) {
+        this.applyingHistory = true;
+        try {
+            ChecklistClientState.setChecked(entryId, checked);
+            this.rebuildTabButtons();
+            this.refreshVisibleEntries();
+        } finally {
+            this.applyingHistory = false;
+        }
+    }
+
+    private static ChecklistTabViewState copyViewState(ChecklistTabViewState viewState) {
+        return new ChecklistTabViewState(viewState.sortMode(), List.copyOf(viewState.manualOrder()), viewState.hideNonStackable());
+    }
+
+    private static List<ChecklistFilterTab> copyTabs(List<ChecklistFilterTab> tabs) {
+        return tabs.stream()
+                .map(tab -> new ChecklistFilterTab(
+                        tab.name(),
+                        List.copyOf(tab.filters()),
+                        List.copyOf(tab.explicitEntryIds()),
+                        tab.noDuplicates(),
+                        copyViewState(tab.viewState())
+                ))
+                .toList();
+    }
+
+    private interface HistoryAction {
+        void undo();
+
+        void redo();
+    }
+
+    private record ScreenState(ChecklistTabViewState allTabViewState, List<ChecklistFilterTab> tabs, int selectedCustomTabIndex, boolean editorOpen) {
     }
 
     private ChecklistSortMode getSelectedSortMode() {
@@ -950,6 +1126,44 @@ public final class ItemChecklistScreen extends Screen {
                 .sorted(Comparator.comparingInt((ChecklistCatalogEntry entry) -> manualPositions.getOrDefault(entry.entryId(), Integer.MAX_VALUE))
                         .thenComparing(baseComparator))
                 .toList();
+    }
+
+    private void removeEntryFromSelectedTab(ChecklistCatalogEntry removedEntry) {
+        if (this.selectedCustomTabIndex < 0 || this.selectedCustomTabIndex >= this.renderedTabs.size()) {
+            return;
+        }
+
+        List<ChecklistFilterTab> tabs = new ArrayList<>(ChecklistClientState.getFilterTabs());
+        if (this.selectedCustomTabIndex >= tabs.size()) {
+            return;
+        }
+
+        ChecklistFilterTab currentTab = tabs.get(this.selectedCustomTabIndex);
+        List<String> currentEntryIds = this.applyOrdering(this.catalog.stream()
+                        .filter(entry -> ChecklistFilters.matchesTab(entry, currentTab))
+                        .filter(entry -> ChecklistFilters.survivesDuplicateFilter(entry, tabs, this.selectedCustomTabIndex))
+                        .toList(), currentTab.viewState()).stream()
+                .map(ChecklistCatalogEntry::entryId)
+                .toList();
+        if (!currentEntryIds.contains(removedEntry.entryId())) {
+            return;
+        }
+
+        List<String> remainingEntryIds = new ArrayList<>(currentEntryIds);
+        remainingEntryIds.remove(removedEntry.entryId());
+        ChecklistTabViewState viewState = new ChecklistTabViewState(
+                currentTab.viewState().sortMode(),
+                remainingEntryIds,
+                currentTab.viewState().hideNonStackable()
+        );
+        tabs.set(this.selectedCustomTabIndex, new ChecklistFilterTab(
+                currentTab.name(),
+                currentTab.filters(),
+                remainingEntryIds,
+                currentTab.noDuplicates(),
+                viewState
+        ));
+        this.persistTabs(tabs, this.selectedCustomTabIndex);
     }
 
     private void applyManualReorder(String draggedEntryId, int targetVisibleIndex) {
@@ -1150,7 +1364,7 @@ public final class ItemChecklistScreen extends Screen {
 
         @Override
         protected boolean isValidMouseClick(int button) {
-            return button == 0 || button == 1;
+            return button == 0 || button == 1 || button == 2;
         }
 
         @Override
@@ -1173,8 +1387,15 @@ public final class ItemChecklistScreen extends Screen {
             ChecklistEntry entry = this.getEntryAtPosition(mouseX, mouseY);
             if (entry != null) {
                 if (button == 1) {
-                    ChecklistClientState.toggle(entry.entry().entryId());
+                    String entryId = entry.entry().entryId();
+                    boolean wasChecked = ChecklistClientState.isChecked(entryId);
+                    ChecklistClientState.setChecked(entryId, !wasChecked);
+                    ItemChecklistScreen.this.recordCheckedAction(entryId, wasChecked, !wasChecked);
                     ItemChecklistScreen.this.rebuildTabButtons();
+                    return true;
+                }
+                if (button == 2) {
+                    ItemChecklistScreen.this.removeEntryFromSelectedTab(entry.entry());
                     return true;
                 }
                 if (button == 0) {
@@ -1352,7 +1573,7 @@ public final class ItemChecklistScreen extends Screen {
 
             @Override
             public boolean mouseClicked(double mouseX, double mouseY, int button) {
-                return button == 0 || button == 1;
+                return button == 0 || button == 1 || button == 2;
             }
 
             @Override
@@ -1406,19 +1627,29 @@ public final class ItemChecklistScreen extends Screen {
                     .toList();
         }
 
+        private List<ChecklistFilterRule> readAllRules() {
+            return this.children().stream()
+                    .map(FilterRuleEntry::toRule)
+                    .toList();
+        }
+
         private void addRule(ChecklistFilterAction action) {
             if (!this.editorActive) {
                 return;
             }
 
+            List<ChecklistFilterRule> before = this.readAllRules();
             FilterRuleEntry entry = new FilterRuleEntry(new ChecklistFilterRule(action, ChecklistFilterType.ITEM_NAME, ""));
             entry.setActive(true);
             this.addEntry(entry);
             this.ensureVisible(entry);
+            ItemChecklistScreen.this.recordEditorRulesAction(before, this.readAllRules());
         }
 
         private void removeRule(FilterRuleEntry entry) {
+            List<ChecklistFilterRule> before = this.readAllRules();
             this.removeEntry(entry);
+            ItemChecklistScreen.this.recordEditorRulesAction(before, this.readAllRules());
         }
 
         private final class FilterRuleEntry extends ContainerObjectSelectionList.Entry<FilterRuleEntry> {
@@ -1475,14 +1706,18 @@ public final class ItemChecklistScreen extends Screen {
             }
 
             private void cycleAction() {
+                List<ChecklistFilterRule> before = FilterEditorList.this.readAllRules();
                 this.action = this.action.next();
                 this.actionButton.setMessage(getFilterActionLabel(this.action));
+                ItemChecklistScreen.this.recordEditorRulesAction(before, FilterEditorList.this.readAllRules());
             }
 
             private void cycleType() {
+                List<ChecklistFilterRule> before = FilterEditorList.this.readAllRules();
                 this.type = this.type.next();
                 this.typeButton.setMessage(getFilterTypeLabel(this.type));
                 this.updateSuggestion();
+                ItemChecklistScreen.this.recordEditorRulesAction(before, FilterEditorList.this.readAllRules());
             }
 
             @Override
