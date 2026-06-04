@@ -5,7 +5,8 @@ public enum ChecklistFilterType {
     ITEM_ID,
     ITEM_TAG,
     BLOCK_TAG,
-    GROUP;
+    GROUP,
+    ENTRY_ID;
 
     public ChecklistFilterType next() {
         ChecklistFilterType[] values = values();

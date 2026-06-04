@@ -61,7 +61,7 @@ public final class ItemChecklistScreen extends Screen {
     private static final Gson JSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Map<String, Double> REMEMBERED_LIST_SCROLL = new HashMap<>();
     private static int rememberedSelectedCustomTabIndex = -1;
-    private static int rememberedTabScrollIndex;
+    private static double rememberedTabScrollOffset;
     private static final int EDITOR_TITLE_Y = SEARCH_Y + 14;
     private static final int EDITOR_SUBTITLE_Y = SEARCH_Y + 30;
     private static final int EDITOR_BUTTONS_Y = SEARCH_Y + 64;
@@ -74,6 +74,10 @@ public final class ItemChecklistScreen extends Screen {
     private static final int FILTER_LIST_TOP = SEARCH_Y + 240;
     private static final int FILTER_ROW_HEIGHT = 52;
     private static final int MAX_HISTORY_ENTRIES = 100;
+    private static final double TAB_SCROLL_CLICK_STEP = 18.0;
+    private static final double TAB_SCROLL_MIN_SPEED = 4.0;
+    private static final double TAB_SCROLL_MAX_SPEED = 26.0;
+    private static final double TAB_SCROLL_ACCELERATION = 0.75;
 
     private static final Comparator<ChecklistCatalogEntry> GROUP_SORT = Comparator
             .comparing(ChecklistCatalogEntry::primarySortTag, String.CASE_INSENSITIVE_ORDER)
@@ -105,7 +109,9 @@ public final class ItemChecklistScreen extends Screen {
     private boolean editorOpen;
     private int controlsBottom = SEARCH_Y + FIELD_HEIGHT;
     private int tabButtonsBottom = TABS_Y + TAB_HEIGHT;
-    private int tabScrollIndex;
+    private double tabScrollOffset;
+    private int tabScrollDirection;
+    private int tabScrollHoldTicks;
     private boolean restoreRememberedListScroll;
     private boolean applyingHistory;
     private List<ChecklistFilterTab> renderedTabs = List.of();
@@ -128,7 +134,7 @@ public final class ItemChecklistScreen extends Screen {
         if (this.selectedCustomTabIndex < -1) {
             this.selectedCustomTabIndex = -1;
         }
-        this.tabScrollIndex = Math.max(0, rememberedTabScrollIndex);
+        this.tabScrollOffset = Math.max(0.0, rememberedTabScrollOffset);
         this.restoreRememberedListScroll = true;
 
         int listWidth = this.getListWidth();
@@ -161,6 +167,7 @@ public final class ItemChecklistScreen extends Screen {
     @Override
     public void tick() {
         super.tick();
+        this.updateTabScrollHold();
         List<ChecklistFilterTab> syncedTabs = ChecklistClientState.getFilterTabs();
         ChecklistTabViewState syncedAllTabViewState = ChecklistClientState.getAllTabViewState();
         if (!this.renderedTabs.equals(syncedTabs) || !this.renderedAllTabViewState.equals(syncedAllTabViewState)) {
@@ -245,6 +252,16 @@ public final class ItemChecklistScreen extends Screen {
         }
 
         return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (button == 0 && this.tabScrollDirection != 0) {
+            this.stopTabScroll();
+            return true;
+        }
+
+        return super.mouseReleased(mouseX, mouseY, button);
     }
 
     @Override
@@ -393,6 +410,7 @@ public final class ItemChecklistScreen extends Screen {
             case ITEM_TAG -> Component.translatable("itemcheck.filter_type.item_tag");
             case BLOCK_TAG -> Component.translatable("itemcheck.filter_type.block_tag");
             case GROUP -> Component.translatable("itemcheck.filter_type.group");
+            case ENTRY_ID -> Component.translatable("itemcheck.filter_type.entry_id");
         };
     }
 
@@ -403,6 +421,7 @@ public final class ItemChecklistScreen extends Screen {
             case ITEM_TAG -> Component.translatable("itemcheck.editor.item_tag_filter_hint");
             case BLOCK_TAG -> Component.translatable("itemcheck.editor.block_tag_filter_hint");
             case GROUP -> Component.translatable("itemcheck.editor.group_filter_hint");
+            case ENTRY_ID -> Component.translatable("itemcheck.editor.entry_id_filter_hint");
         };
     }
 
@@ -636,97 +655,184 @@ public final class ItemChecklistScreen extends Screen {
         int right = this.getListRight();
         int y = this.getTabsY();
 
-        List<Component> labels = new ArrayList<>();
-        labels.add(Component.translatable("itemcheck.tab.all"));
-        this.renderedTabs.forEach(tab -> labels.add(Component.literal(tab.name())));
-        labels.add(Component.translatable("itemcheck.tab.new"));
+        List<Component> labels = this.buildTabLabels();
 
         int totalTabs = labels.size();
-        this.clampTabScrollIndex(totalTabs);
         int tabAreaLeft = left + TAB_NAV_WIDTH + TAB_GAP;
         int tabAreaRight = right - TAB_NAV_WIDTH - TAB_GAP;
-        int x = tabAreaLeft;
+        int tabAreaWidth = Math.max(0, tabAreaRight - tabAreaLeft);
+        this.clampTabScrollOffset(labels);
 
         Button leftButton = this.addRenderableWidget(Button.builder(Component.literal("<"), button -> this.scrollTabs(-1))
                 .bounds(left, y, TAB_NAV_WIDTH, TAB_HEIGHT)
-                .build(builder -> new TabNavButton(builder)));
-        leftButton.active = this.tabScrollIndex > 0;
+                .build(builder -> new TabNavButton(builder, -1)));
+        leftButton.active = this.tabScrollOffset > 0.0;
         this.tabButtons.add(leftButton);
 
         Button rightButton = this.addRenderableWidget(Button.builder(Component.literal(">"), button -> this.scrollTabs(1))
                 .bounds(right - TAB_NAV_WIDTH, y, TAB_NAV_WIDTH, TAB_HEIGHT)
-                .build(builder -> new TabNavButton(builder)));
+                .build(builder -> new TabNavButton(builder, 1)));
         this.tabButtons.add(rightButton);
 
-        int nextHiddenIndex = totalTabs;
-        for (int index = this.tabScrollIndex; index < totalTabs; index++) {
+        double x = tabAreaLeft - this.tabScrollOffset;
+        for (int index = 0; index < totalTabs; index++) {
             Component label = labels.get(index);
             boolean isNewButton = index == labels.size() - 1;
             boolean selected = !isNewButton && index - 1 == this.selectedCustomTabIndex;
             Component displayLabel = label;
-            int buttonWidth = Math.max(56, Math.min(110, this.font.width(displayLabel) + 20));
-            if (x + buttonWidth > tabAreaRight) {
-                nextHiddenIndex = index;
-                break;
-            }
+            int buttonWidth = this.getTabButtonWidth(displayLabel);
 
             final int customIndex = index - 1;
-            boolean complete = !isNewButton && this.isTabComplete(customIndex);
-            Button button = this.addRenderableWidget(Button.builder(displayLabel, pressed -> {
-                        if (isNewButton) {
-                            this.createNewTab();
-                        } else {
-                            this.selectTab(customIndex);
-                        }
-                    })
-                    .bounds(x, y, buttonWidth, TAB_HEIGHT)
-                    .build(builder -> new TabButton(builder, selected, complete, customIndex) {
-                        @Override
-                        public boolean mouseClicked(double mouseX, double mouseY, int button) {
-                            if (button == 1 && this.visible && this.active && this.isMouseOver(mouseX, mouseY) && customIndex >= 0) {
-                                ItemChecklistScreen.this.openEditorForTab(customIndex);
-                                return true;
+            int buttonX = (int) Math.round(x);
+            if (buttonX + buttonWidth > tabAreaLeft && buttonX < tabAreaRight && tabAreaWidth > 0) {
+                boolean complete = !isNewButton && this.isTabComplete(customIndex);
+                Button button = this.addRenderableWidget(Button.builder(displayLabel, pressed -> {
+                            if (isNewButton) {
+                                this.createNewTab();
+                            } else {
+                                this.selectTab(customIndex);
                             }
+                        })
+                        .bounds(buttonX, y, buttonWidth, TAB_HEIGHT)
+                        .build(builder -> new TabButton(builder, selected, complete, tabAreaLeft, tabAreaRight) {
+                            @Override
+                            public boolean mouseClicked(double mouseX, double mouseY, int button) {
+                                if (!this.isInClip(mouseX)) {
+                                    return false;
+                                }
+                                if (button == 1 && this.visible && this.active && this.isMouseOver(mouseX, mouseY) && customIndex >= 0) {
+                                    ItemChecklistScreen.this.openEditorForTab(customIndex);
+                                    return true;
+                                }
 
-                            return super.mouseClicked(mouseX, mouseY, button);
-                        }
-                    }));
-            this.tabButtons.add(button);
+                                return super.mouseClicked(mouseX, mouseY, button);
+                            }
+                        }));
+                this.tabButtons.add(button);
+            }
             x += buttonWidth + TAB_GAP;
         }
-        rightButton.active = nextHiddenIndex < totalTabs;
+        rightButton.active = this.tabScrollOffset < this.getMaxTabScrollOffset(labels);
         this.tabButtonsBottom = y + TAB_HEIGHT;
     }
 
     private void scrollTabs(int delta) {
-        this.tabScrollIndex += delta;
+        this.setTabScrollOffset(this.tabScrollOffset + delta * TAB_SCROLL_CLICK_STEP);
+    }
+
+    private void startTabScroll(int direction) {
+        this.tabScrollDirection = direction;
+        this.tabScrollHoldTicks = 0;
+    }
+
+    private void stopTabScroll() {
+        this.tabScrollDirection = 0;
+        this.tabScrollHoldTicks = 0;
+    }
+
+    private void updateTabScrollHold() {
+        if (this.tabScrollDirection == 0) {
+            return;
+        }
+
+        double speed = Math.min(TAB_SCROLL_MAX_SPEED, TAB_SCROLL_MIN_SPEED + this.tabScrollHoldTicks * TAB_SCROLL_ACCELERATION);
+        double before = this.tabScrollOffset;
+        this.setTabScrollOffset(this.tabScrollOffset + this.tabScrollDirection * speed);
+        if (this.tabScrollOffset == before) {
+            this.stopTabScroll();
+        } else {
+            this.tabScrollHoldTicks++;
+        }
+    }
+
+    private void setTabScrollOffset(double offset) {
+        List<Component> labels = this.buildTabLabels();
+        double clamped = Math.max(0.0, Math.min(offset, this.getMaxTabScrollOffset(labels)));
+        if (Math.abs(clamped - this.tabScrollOffset) < 0.01) {
+            return;
+        }
+
+        this.tabScrollOffset = clamped;
         this.rebuildTabButtons();
     }
 
-    private void clampTabScrollIndex(int totalTabs) {
-        this.tabScrollIndex = Math.max(0, Math.min(this.tabScrollIndex, Math.max(0, totalTabs - 1)));
+    private void clampTabScrollOffset(List<Component> labels) {
+        this.tabScrollOffset = Math.max(0.0, Math.min(this.tabScrollOffset, this.getMaxTabScrollOffset(labels)));
     }
 
     private void ensureSelectedTabVisible() {
-        int selectedTabButtonIndex = this.selectedCustomTabIndex + 1;
-        if (selectedTabButtonIndex < 0) {
-            selectedTabButtonIndex = 0;
+        List<Component> labels = this.buildTabLabels();
+        int selectedTabButtonIndex = Math.max(0, this.selectedCustomTabIndex + 1);
+        if (selectedTabButtonIndex >= labels.size()) {
+            return;
         }
-        if (selectedTabButtonIndex < this.tabScrollIndex) {
-            this.tabScrollIndex = selectedTabButtonIndex;
+
+        int tabAreaWidth = this.getTabAreaWidth();
+        double tabLeft = this.getTabOffsetForIndex(labels, selectedTabButtonIndex);
+        double tabRight = tabLeft + this.getTabButtonWidth(labels.get(selectedTabButtonIndex));
+        if (tabLeft < this.tabScrollOffset) {
+            this.tabScrollOffset = tabLeft;
+        } else if (tabRight > this.tabScrollOffset + tabAreaWidth) {
+            this.tabScrollOffset = tabRight - tabAreaWidth;
         }
+        this.clampTabScrollOffset(labels);
     }
 
     private void revealSelectedTab() {
-        this.tabScrollIndex = Math.max(0, this.selectedCustomTabIndex + 1);
+        List<Component> labels = this.buildTabLabels();
+        int selectedTabButtonIndex = Math.max(0, Math.min(labels.size() - 1, this.selectedCustomTabIndex + 1));
+        this.tabScrollOffset = this.getTabOffsetForIndex(labels, selectedTabButtonIndex);
+        this.clampTabScrollOffset(labels);
     }
 
     private void rememberCurrentViewState() {
         rememberedSelectedCustomTabIndex = this.selectedCustomTabIndex;
-        rememberedTabScrollIndex = this.tabScrollIndex;
+        rememberedTabScrollOffset = this.tabScrollOffset;
         if (this.checklist != null) {
             REMEMBERED_LIST_SCROLL.put(this.getSelectedTabMemoryKey(), this.checklist.getScrollAmount());
         }
+    }
+
+    private List<Component> buildTabLabels() {
+        List<Component> labels = new ArrayList<>();
+        labels.add(Component.translatable("itemcheck.tab.all"));
+        this.renderedTabs.forEach(tab -> labels.add(Component.literal(tab.name())));
+        labels.add(Component.translatable("itemcheck.tab.new"));
+        return labels;
+    }
+
+    private int getTabButtonWidth(Component label) {
+        return Math.max(56, Math.min(110, this.font.width(label) + 20));
+    }
+
+    private double getTabOffsetForIndex(List<Component> labels, int targetIndex) {
+        double offset = 0.0;
+        for (int index = 0; index < targetIndex && index < labels.size(); index++) {
+            offset += this.getTabButtonWidth(labels.get(index)) + TAB_GAP;
+        }
+        return offset;
+    }
+
+    private double getTabContentWidth(List<Component> labels) {
+        if (labels.isEmpty()) {
+            return 0.0;
+        }
+
+        double width = -TAB_GAP;
+        for (Component label : labels) {
+            width += this.getTabButtonWidth(label) + TAB_GAP;
+        }
+        return Math.max(0.0, width);
+    }
+
+    private int getTabAreaWidth() {
+        int left = OUTER_MARGIN;
+        int right = this.getListRight();
+        return Math.max(0, right - left - TAB_NAV_WIDTH * 2 - TAB_GAP * 2);
+    }
+
+    private double getMaxTabScrollOffset(List<Component> labels) {
+        return Math.max(0.0, this.getTabContentWidth(labels) - this.getTabAreaWidth());
     }
 
     private String getSelectedTabMemoryKey() {
@@ -1139,26 +1245,38 @@ public final class ItemChecklistScreen extends Screen {
         }
 
         ChecklistFilterTab currentTab = tabs.get(this.selectedCustomTabIndex);
-        List<String> currentEntryIds = this.applyOrdering(this.catalog.stream()
-                        .filter(entry -> ChecklistFilters.matchesTab(entry, currentTab))
-                        .filter(entry -> ChecklistFilters.survivesDuplicateFilter(entry, tabs, this.selectedCustomTabIndex))
-                        .toList(), currentTab.viewState()).stream()
-                .map(ChecklistCatalogEntry::entryId)
-                .toList();
-        if (!currentEntryIds.contains(removedEntry.entryId())) {
+        if (!ChecklistFilters.matchesTab(removedEntry, currentTab)
+                || !ChecklistFilters.survivesDuplicateFilter(removedEntry, tabs, this.selectedCustomTabIndex)) {
             return;
         }
 
-        List<String> remainingEntryIds = new ArrayList<>(currentEntryIds);
+        List<String> remainingEntryIds = new ArrayList<>(currentTab.explicitEntryIds());
         remainingEntryIds.remove(removedEntry.entryId());
+        List<ChecklistFilterRule> filters = new ArrayList<>(currentTab.filters());
+        ChecklistFilterTab tabAfterExplicitRemoval = new ChecklistFilterTab(
+                currentTab.name(),
+                filters,
+                remainingEntryIds,
+                currentTab.noDuplicates(),
+                currentTab.viewState()
+        );
+        if (ChecklistFilters.matchesTab(removedEntry, tabAfterExplicitRemoval)) {
+            ChecklistFilterRule exclusion = new ChecklistFilterRule(ChecklistFilterAction.EXCLUDE, ChecklistFilterType.ENTRY_ID, removedEntry.entryId());
+            if (!filters.contains(exclusion)) {
+                filters.add(exclusion);
+            }
+        }
+        List<String> manualOrder = currentTab.viewState().manualOrder().stream()
+                .filter(entryId -> !entryId.equals(removedEntry.entryId()))
+                .toList();
         ChecklistTabViewState viewState = new ChecklistTabViewState(
                 currentTab.viewState().sortMode(),
-                remainingEntryIds,
+                manualOrder,
                 currentTab.viewState().hideNonStackable()
         );
         tabs.set(this.selectedCustomTabIndex, new ChecklistFilterTab(
                 currentTab.name(),
-                currentTab.filters(),
+                filters,
                 remainingEntryIds,
                 currentTab.noDuplicates(),
                 viewState
@@ -1282,11 +1400,19 @@ public final class ItemChecklistScreen extends Screen {
     private class TabButton extends Button {
         private final boolean selected;
         private final boolean complete;
+        private final int clipLeft;
+        private final int clipRight;
 
-        private TabButton(Builder builder, boolean selected, boolean complete, int customIndex) {
+        private TabButton(Builder builder, boolean selected, boolean complete, int clipLeft, int clipRight) {
             super(builder);
             this.selected = selected;
             this.complete = complete;
+            this.clipLeft = clipLeft;
+            this.clipRight = clipRight;
+        }
+
+        protected boolean isInClip(double mouseX) {
+            return mouseX >= this.clipLeft && mouseX < this.clipRight;
         }
 
         @Override
@@ -1305,13 +1431,29 @@ public final class ItemChecklistScreen extends Screen {
                 borderColor = 0xFF6A6A6A;
             }
 
-            ItemChecklistScreen.this.renderCustomButton(guiGraphics, this, backgroundColor, borderColor, this.active ? 0xFFFFFFFF : 0xFF8A8A8A);
+            guiGraphics.enableScissor(this.clipLeft, this.getY(), this.clipRight, this.getY() + this.getHeight());
+            try {
+                ItemChecklistScreen.this.renderCustomButton(guiGraphics, this, backgroundColor, borderColor, this.active ? 0xFFFFFFFF : 0xFF8A8A8A);
+            } finally {
+                guiGraphics.disableScissor();
+            }
         }
     }
 
     private class TabNavButton extends Button {
-        private TabNavButton(Builder builder) {
+        private final int direction;
+
+        private TabNavButton(Builder builder, int direction) {
             super(builder);
+            this.direction = direction;
+        }
+
+        @Override
+        public boolean mouseClicked(double mouseX, double mouseY, int button) {
+            if (button == 0 && this.visible && this.active && this.isMouseOver(mouseX, mouseY)) {
+                ItemChecklistScreen.this.startTabScroll(this.direction);
+            }
+            return super.mouseClicked(mouseX, mouseY, button);
         }
 
         @Override

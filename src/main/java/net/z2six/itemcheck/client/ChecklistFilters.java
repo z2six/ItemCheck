@@ -13,18 +13,15 @@ public final class ChecklistFilters {
     }
 
     public static boolean matchesTab(ChecklistCatalogEntry entry, ChecklistFilterTab tab) {
-        if (!tab.explicitEntryIds().isEmpty()) {
-            return tab.explicitEntryIds().contains(entry.entryId());
-        }
-
         List<ChecklistFilterRule> includeRules = tab.filters().stream()
                 .filter(rule -> rule.action() == ChecklistFilterAction.INCLUDE && !rule.expression().isBlank())
                 .toList();
-        if (includeRules.isEmpty()) {
+        boolean explicitlyIncluded = tab.explicitEntryIds().contains(entry.entryId());
+        if (!explicitlyIncluded && includeRules.isEmpty()) {
             return false;
         }
 
-        boolean included = includeRules.stream().anyMatch(rule -> matchesRule(entry, rule));
+        boolean included = explicitlyIncluded || includeRules.stream().anyMatch(rule -> matchesRule(entry, rule));
         if (!included) {
             return false;
         }
@@ -60,6 +57,7 @@ public final class ChecklistFilters {
             case ITEM_TAG -> matchesAny(entry.itemTags(), rule.expression());
             case BLOCK_TAG -> matchesAny(entry.blockTags(), rule.expression());
             case GROUP -> matchesValue(entry.groupLabelLower(), rule.expression());
+            case ENTRY_ID -> matchesValue(entry.entryId().toLowerCase(), rule.expression());
         };
     }
 
